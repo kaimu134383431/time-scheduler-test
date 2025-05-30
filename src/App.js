@@ -76,21 +76,21 @@ const GOOGLE_CLIENT_ID =
 
 // AIによる励ましメッセージのバリエーションを増やします
 const motivationalMessages = [
-  "その調子です！小さな一歩が大きな成果に繋がりますよー。",
-  "素晴らしい集中力ですね！このタスクが終わったら、少し休憩しましょうかー。",
-  "よく頑張っていますね！そなたの努力はきっと実を結びますわー。",
-  "もし行き詰まったら、深呼吸して、少し視点を変えてみましょうー。",
+  "その調子です！小さな一歩が大きな成果に繋がります！",
+  "素晴らしい集中力ですね！このタスクが終わったら、少し休憩しましょう！",
+  "よく頑張っていますね！あなたの努力はきっと実を結びます！",
+  "もし行き詰まったら、深呼吸して、少し視点を変えてみましょう！",
   "あと少しで達成ですね！ゴールは目の前ですわー！",
-  "一つ一つ着実に進めていて、本当にすごいですわー。",
-  "困難な課題にも挑戦するそなたは、本当に立派ですー。",
-  "焦らず、そなたのペースで進めていきましょうねー。",
+  "一つ一つ着実に進めていて、本当にすごいです！",
+  "困難な課題にも挑戦するあなたは、本当に立派です！",
+  "焦らず、あなたのペースで進めていきましょう！",
 ];
 
 const praiseForSmallWinMessages = [
-  "やりましたね！小さな達成、素晴らしいですわー！",
-  "さすがです！この調子でどんどん進めちゃいましょうー！",
-  "お見事です！努力が形になりましたねー。",
-  "完璧です！そなたならできると信じていましたわー。",
+  "やったねっ！小さな一歩でも、大きな成長だよ〜！すごいじゃん！",
+  "さすがっ！この調子でどんどん進んじゃお〜！一緒にがんばろっ♪",
+  "お見事っ！コツコツの積み重ねが、ちゃんと形になってきたね！",
+  "完っ璧〜っ！やっぱり、君ならできるって信じてたよっ！",
 ];
 
 function MainAppContent() {
@@ -111,7 +111,7 @@ function MainAppContent() {
   const [badges, setBadges] = useState([]);
   const [avatarMood, setAvatarMood] = useState("neutral"); // 'happy', 'neutral', 'sad', 'focused'
   const [aiFeedback, setAiFeedback] = useState(
-    "こんにちはですのー！今日の目標は何にしましょうかー？"
+    "こんにちは！今日の目標は何にしましょうか～？"
   );
   const [message, setMessage] = useState({ text: "", type: "info" }); // type: 'info', 'success', 'error'
 
@@ -145,7 +145,7 @@ function MainAppContent() {
       ) {
         console.error("Firebase configuration is missing or incomplete.");
         setMessage({
-          text: "Firebase設定が不完全です。管理者にご連絡くださいましー。",
+          text: "Firebase設定が不完全です。管理者にご連絡ください。",
           type: "error",
         });
         return;
@@ -197,7 +197,7 @@ function MainAppContent() {
     } catch (error) {
       console.error("Firebase initialization error:", error);
       setMessage({
-        text: "Firebaseの初期化に失敗しましたわー。ページを再読み込みしてみてくださいましー。",
+        text: "Firebaseの初期化に失敗しました。ページを再読み込みしてみてください。",
         type: "error",
       });
     }
@@ -238,7 +238,7 @@ function MainAppContent() {
       (error) => {
         console.error("Error fetching tasks:", error);
         setMessage({
-          text: "課題の取得中にエラーが発生しましたわー。",
+          text: "課題の取得中にエラーが発生しました。",
           type: "error",
         });
       }
@@ -254,22 +254,22 @@ function MainAppContent() {
     if (currentTasks.length === 0) {
       setAvatarMood("neutral");
       setAiFeedback(
-        "新しい目標を立ててみませんかー？わたくしがお手伝いしますわー。"
+        "新しい目標を立ててみませんか～？わたくしがお手伝いします♪"
       );
     } else if (uncompletedTasks.length === 0) {
       setAvatarMood("happy");
       setAiFeedback(
-        "全ての課題を完了しましたね！素晴らしいですわー！ゆっくりお休みくださいましー。"
+        "全ての課題を完了しましたね！素晴らしいです！ゆっくりお休みください～"
       );
     } else if (completedTasksCount > 0) {
       setAvatarMood("focused");
       setAiFeedback(
-        `順調に進んでいますね！あと${uncompletedTasks.length}件、この調子で頑張りましょうー！`
+        `順調に進んでいますね！あと${uncompletedTasks.length}件、この調子で頑張りましょう～！`
       );
     } else {
       setAvatarMood("sad");
       setAiFeedback(
-        "少しお疲れのようですわね…。まずは小さなことから始めてみませんかー？"
+        "少しお疲れのようですね…。まずは小さなことから始めてみませんか～？"
       );
     }
   };
@@ -277,12 +277,12 @@ function MainAppContent() {
   // --- Google Login ---
   const googleLogin = useGoogleLogin({
     scope:
-      "https://www.googleapis.com/auth/calendar.events.readonly https://www.googleapis.com/auth/calendar.events.freebusy https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.events.readonly https://www.googleapis.com/auth/calendar.events.freebusy https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
     onSuccess: async (tokenResponse) => {
       const token = tokenResponse.access_token;
       setGoogleAccessToken(token);
       setMessage({
-        text: "Googleログイン成功ですのー！カレンダー情報を取得しますわー。",
+        text: "Googleログイン成功です！カレンダー情報を取得しますね～",
         type: "success",
       });
       try {
@@ -339,7 +339,7 @@ function MainAppContent() {
     } catch (error) {
       console.error("Failed to fetch Google Calendar events:", error);
       setMessage({
-        text: "Googleカレンダーの予定取得中にエラーが発生しましたわー。",
+        text: "Googleカレンダーの予定取得中にエラーが発生しました。",
         type: "error",
       });
       setGoogleEvents([]); // エラー時は空にする
@@ -351,7 +351,7 @@ function MainAppContent() {
   // --- AIによるタスク分割提案 (モックに変更) ---
   const suggestSubTasks = async (mainTaskTitle) => {
     if (!mainTaskTitle.trim()) return;
-    setAiSuggestion("AIが小タスクを考えていますわー… (現在モック動作中ですの)");
+    setAiSuggestion("AIが小タスクを考えています… (現在モック動作中です)");
     setIsLoading(true);
 
     // モックデータによる提案
@@ -364,11 +364,11 @@ function MainAppContent() {
         `「${mainTaskTitle}」を見直して提出する`,
       ];
       setAiSuggestion(
-        `「${mainTaskTitle}」の小タスク案ですわー：\n${mockSubTasks
+        `「${mainTaskTitle}」の小タスク案です：\n${mockSubTasks
           .map((st) => `- ${st}`)
           .join(
             "\n"
-          )}\nこれらのタスクを個別に追加しますかー？ (この機能は現在開発中ですの)`
+          )}\nこれらのタスクを個別に追加しますか～？ (この機能は現在開発中です)`
       );
       setIsLoading(false);
     }, 1500); // 1.5秒後に表示
@@ -428,14 +428,14 @@ function MainAppContent() {
   const handleTaskSubmit = async () => {
     if (!db || !currentUserId || !isAuthReady) {
       setMessage({
-        text: "システム準備中ですのー。しばらくお待ちくださいましー。",
+        text: "システム準備中です。しばらくお待ちください～。",
         type: "error",
       });
       return;
     }
     if (!newTaskTitle.trim()) {
       setMessage({
-        text: "課題タイトルを入力してくださいましー。",
+        text: "課題タイトルを入力してください。",
         type: "error",
       });
       return;
@@ -462,13 +462,13 @@ function MainAppContent() {
         );
         await updateDoc(taskDocRef, taskData);
         setMessage({
-          text: `「${newTaskTitle}」を更新しましたわー！`,
+          text: `「${newTaskTitle}」を更新しました！`,
           type: "success",
         });
       } else {
         await addDoc(tasksCollectionRef, taskData);
         setMessage({
-          text: `「${newTaskTitle}」を追加しましたわー！`,
+          text: `「${newTaskTitle}」を追加しました！`,
           type: "success",
         });
         if (newTaskEstimate && parseInt(newTaskEstimate) >= 60) {
@@ -483,7 +483,7 @@ function MainAppContent() {
     } catch (error) {
       console.error("Error saving task:", error);
       setMessage({
-        text: "課題の保存中にエラーが発生しましたわー。",
+        text: "課題の保存中にエラーが発生しました。",
         type: "error",
       });
     } finally {
@@ -499,7 +499,7 @@ function MainAppContent() {
     setNewTaskDeadline(task.deadline || "");
     setShowTaskInput(true);
     if (taskInputRef.current) taskInputRef.current.focus();
-    setMessage({ text: `「${task.title}」を編集中ですわー。`, type: "info" });
+    setMessage({ text: `「${task.title}」を編集中です。`, type: "info" });
   };
 
   // --- タスク完了/未完了切り替え ---
@@ -526,7 +526,7 @@ function MainAppContent() {
               : 10)
         );
         setAiFeedback(
-          `${taskTitle}を完了しましたのね！${
+          `${taskTitle}を完了しましたね！${
             praiseForSmallWinMessages[
               Math.floor(Math.random() * praiseForSmallWinMessages.length)
             ]
@@ -551,22 +551,20 @@ function MainAppContent() {
           );
           if (newStreak > 1)
             setMessage({
-              text: `${newStreak}日連続達成！素晴らしいですわー！`,
+              text: `${newStreak}日連続達成！素晴らしいです！`,
               type: "success",
             });
         }
       } else {
         setPoints((prev) => Math.max(0, prev - 10));
-        setAiFeedback(
-          `${taskTitle}を未完了に戻しましたのね。もう一度挑戦ですわー！`
-        );
+        setAiFeedback(`${taskTitle}を未完了に戻しました。もう一度挑戦です！`);
         setAvatarMood("neutral");
       }
       checkBadges();
     } catch (error) {
       console.error("Error toggling task completion:", error);
       setMessage({
-        text: "課題の更新中にエラーが発生しましたわー。",
+        text: "課題の更新中にエラーが発生しました。",
         type: "error",
       });
     } finally {
@@ -585,11 +583,11 @@ function MainAppContent() {
         taskId
       );
       await deleteDoc(taskDocRef);
-      setMessage({ text: "課題を削除しましたわー。", type: "info" });
+      setMessage({ text: "課題を削除しました。", type: "info" });
     } catch (error) {
       console.error("Error deleting task:", error);
       setMessage({
-        text: "課題の削除中にエラーが発生しましたわー。",
+        text: "課題の削除中にエラーが発生しました。",
         type: "error",
       });
     } finally {
@@ -619,7 +617,7 @@ function MainAppContent() {
       setMessage({
         text: `新しいバッジ「${
           newBadges[newBadges.length - 1]
-        }」を獲得しましたわー！おめでとうございますのー！`,
+        }」を獲得しました！おめでとうございます～！`,
         type: "success",
       });
     }
@@ -739,7 +737,7 @@ function MainAppContent() {
   const suggestSchedule = async () => {
     if (!googleAccessToken) {
       setMessage({
-        text: "Googleカレンダー連携のためにログインしてくださいましー。",
+        text: "Googleカレンダー連携のためにログインしてください。",
         type: "info",
       });
       googleLogin();
@@ -755,7 +753,7 @@ function MainAppContent() {
     if (uncompletedTasks.length === 0) {
       setSchedule([]);
       setMessage({
-        text: "全ての課題が完了しているか、見積もり時間がないためスケジュール提案できませんわー。",
+        text: "全ての課題が完了しているか、見積もり時間がないためスケジュール提案できません。",
         type: "info",
       });
       setIsLoading(false);
@@ -809,20 +807,18 @@ function MainAppContent() {
             new Date(b.start.dateTime || b.start.date)
         );
       } else {
-        console.warn(
-          `課題「${task.title}」の空き時間が見つかりませんでしたのー。`
-        );
+        console.warn(`課題「${task.title}」の空き時間が見つかりませんでした。`);
       }
     }
     setSchedule(suggestedSlots);
     if (suggestedSlots.length > 0) {
       setMessage({
-        text: "AIがスケジュールを提案しましたわー！",
+        text: "AIがスケジュールを提案しました！",
         type: "success",
       });
     } else {
       setMessage({
-        text: "現在、提案できる空き時間が見つかりませんでしたわー。カレンダーを確認するか、タスクの期限や時間を見直してみてくださいましー。",
+        text: "現在、提案できる空き時間が見つかりませんでした。カレンダーを確認するか、タスクの期限や時間を見直してみてください。",
         type: "info",
       });
     }
@@ -831,9 +827,7 @@ function MainAppContent() {
 
   // --- AIによる励まし (モックに変更) ---
   const getAiMotivation = async () => {
-    setAiFeedback(
-      "AIが励ましの言葉を考えていますわー… (現在モック動作中ですの)"
-    );
+    setAiFeedback("AIが励ましの言葉を考えています… ");
     setAvatarMood("focused");
     setIsLoading(true);
 
@@ -849,7 +843,7 @@ function MainAppContent() {
           Math.floor(Math.random() * motivationalMessages.length)
         ];
       if (uncompletedTasksTitles !== "たくさんの課題") {
-        message = `「${uncompletedTasksTitles}」の攻略、応援しておりますわー！ ${message}`;
+        message = `「${uncompletedTasksTitles}」の攻略、応援しております！ ${message}`;
       }
       setAiFeedback(message);
       setAvatarMood("happy");
@@ -897,7 +891,7 @@ function MainAppContent() {
   // --- 音声入力 (モック) ---
   const mockVoiceInput = () => {
     setMessage({
-      text: "音声入力は現在準備中ですわー。例えば「レポートを明日までに30分やる」のように話しかけてくださいましー。",
+      text: "音声入力は現在準備中です。例えば「レポートを明日までに30分やる」のように話しかけてください～。",
       type: "info",
     });
   };
@@ -906,14 +900,14 @@ function MainAppContent() {
   const addScheduleToGoogleCalendar = async () => {
     if (schedule.length === 0) {
       setMessage({
-        text: "カレンダーに追加するスケジュールがありませんわー。",
+        text: "カレンダーに追加するスケジュールがありません。",
         type: "info",
       });
       return;
     }
     if (!googleAccessToken) {
       setMessage({
-        text: "Googleカレンダーへのアクセス許可が必要ですのー。",
+        text: "Googleカレンダーへのアクセス許可が必要です。",
         type: "error",
       });
       return;
@@ -925,7 +919,7 @@ function MainAppContent() {
     for (const item of schedule) {
       const event = {
         summary: `【やる気アシスト】${item.title}`,
-        description: `この時間は「${item.title}」に集中しましょうー！\n(やる気アシストAIより)`,
+        description: `この時間は「${item.title}」に集中しましょう～！\n(やる気アシストAIより)`,
         start: {
           dateTime: item.start.toISOString(),
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -1016,9 +1010,9 @@ function MainAppContent() {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-purple-100 to-indigo-200 flex flex-col items-center justify-center z-50">
         <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-white mb-6"></div>
-        <p className="text-white text-2xl font-semibold">準備中ですわー…</p>
+        <p className="text-white text-2xl font-semibold">準備中です…</p>
         <p className="text-purple-200 text-lg mt-2">
-          そなたのやる気を全力で応援しますのー！
+          あなたのやる気を全力で応援します！
         </p>
       </div>
     );
@@ -1029,7 +1023,7 @@ function MainAppContent() {
       {isLoading && ( // db初期化後、他の処理中のローディング
         <div className="fixed inset-0 bg-gray-800 bg-opacity-50 flex items-center justify-center z-50">
           <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-500"></div>
-          <p className="ml-4 text-white text-xl">処理中ですわー…</p>
+          <p className="ml-4 text-white text-xl">処理中です…</p>
         </div>
       )}
       <link
@@ -1044,7 +1038,7 @@ function MainAppContent() {
             やる気アシストAI
           </h1>
           <p className="text-md sm:text-lg text-gray-600">
-            そなたの「やる気が出ない」を、わたくしが応援しますわー！
+            あなたの「やる気が出ない」を、わたくしが応援します！
           </p>
           {currentUserId && (
             <p className="text-xs text-gray-400 mt-1">
@@ -1082,7 +1076,7 @@ function MainAppContent() {
               Googleでカレンダー連携
             </button>
             <p className="text-xs text-gray-500 mt-2">
-              カレンダーと連携して、より良いスケジュール提案をしますわー。
+              カレンダーと連携して、より良いスケジュール提案をします。
             </p>
           </section>
         )}
@@ -1090,7 +1084,7 @@ function MainAppContent() {
           <div className="bg-green-50 p-3 rounded-lg shadow-sm text-center">
             <p className="text-sm text-green-700 font-medium">
               <User className="inline-block mr-2 h-5 w-5" />
-              {googleUserInfo.name} さん、カレンダー連携済みですのー！
+              {googleUserInfo.name} さん、カレンダー連携済みです！
             </p>
           </div>
         )}
@@ -1122,7 +1116,7 @@ function MainAppContent() {
                 <Lightbulb className="h-6 w-6 text-yellow-500 mr-3" />
               </div>
               <div>
-                <p className="font-bold">AIからの提案ですのー</p>
+                <p className="font-bold">AIからの提案です～</p>
                 <p className="text-sm whitespace-pre-line">{aiSuggestion}</p>
                 <button
                   onClick={() => setAiSuggestion("")}
@@ -1275,7 +1269,7 @@ function MainAppContent() {
         >
           {tasks.length === 0 ? (
             <p className="text-gray-500 text-center py-4">
-              まだ課題がありませんわー。新しい課題を追加してみましょう！
+              まだ課題がありません。新しい課題を追加してみましょう！
             </p>
           ) : (
             <ul className="space-y-2.5">
@@ -1373,7 +1367,7 @@ function MainAppContent() {
           </button>
           {!googleAccessToken && (
             <p className="text-xs text-center text-gray-500 mb-2">
-              Googleカレンダーと連携すると、空き時間を考慮した提案ができますわー。
+              Googleカレンダーと連携すると、空き時間を考慮した提案ができます。
             </p>
           )}
           {schedule.length === 0 && googleAccessToken && (
