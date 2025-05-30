@@ -891,7 +891,7 @@ function MainAppContent() {
   // --- 音声入力 (モック) ---
   const mockVoiceInput = () => {
     setMessage({
-      text: "音声入力は現在準備中です。例えば「レポートを明日までに30分やる」のように話しかけてください～。",
+      text: "音声入力は現在準備中です。例えば「レポートを明日までに30分やる」のように話しかけてください。",
       type: "info",
     });
   };
@@ -1372,7 +1372,7 @@ function MainAppContent() {
           )}
           {schedule.length === 0 && googleAccessToken && (
             <p className="text-gray-500 text-center py-3">
-              提案できるスケジュールがありませんのー。未完了の課題があるか、またはGoogleカレンダーの空き時間を確認してくださいましー。
+              提案できるスケジュールがありません。未完了の課題があるか、またはGoogleカレンダーの空き時間を確認してください。
             </p>
           )}
           {schedule.length > 0 && (
@@ -1409,7 +1409,7 @@ function MainAppContent() {
         </CollapsibleSection>
 
         <footer className="text-center text-gray-500 text-xs pt-6 border-t border-gray-200">
-          <p>&copy; 2024 やる気アシストAI. そなたの頑張りを応援しますわー。</p>
+          <p>&copy; 2024 やる気アシストAI. あなたの頑張りを応援します！</p>
         </footer>
       </div>
 
@@ -1491,7 +1491,7 @@ const GamificationCard = ({
               </span>
             ))
           ) : (
-            <span className="text-gray-500 text-sm">まだありませんわー</span>
+            <span className="text-gray-500 text-sm">まだありません</span>
           )}
         </div>
       ) : (
@@ -1520,12 +1520,12 @@ export default function App() {
         }}
       >
         <h1>AIやる気アシスタント (設定エラー)</h1>
-        <p>Google OAuth Client IDが設定されていませんのー。</p>
+        <p>Google OAuth Client IDが設定されていません。</p>
         <p>
           <code>App.js</code>内の<code>GOOGLE_CLIENT_ID</code>
-          を正しい値に更新してくださいましー。
+          を正しい値に更新してください。
         </p>
-        <p>この設定がないと、Googleカレンダー連携機能が使えませんわー。</p>
+        <p>この設定がないと、Googleカレンダー連携機能が使えません。</p>
       </div>
     );
   }
