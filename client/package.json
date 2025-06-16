@@ -8,13 +8,16 @@
     "axios": "^1.7.2",
     "firebase": "^10.12.2",
     "lucide-react": "^0.395.0",
-    "@react-oauth/google": "^1.2.1"
+    "@react-oauth/google": "^1.2.1",
+    "concurrently": "^8.2.2"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "server": "cd server && python3 server.py",
+    "dev": "concurrently \"npm run start\" \"npm run server\""
   },
   "browserslist": {
     "production": [

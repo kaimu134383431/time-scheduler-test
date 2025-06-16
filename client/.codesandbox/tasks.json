@@ -1,33 +1,37 @@
 {
-  // These tasks will run in order when initializing your CodeSandbox project.
-  "setupTasks": [
-    {
-      "command": "pnpm install",
-      "name": "Installing Dependencies"
-    }
-  ],
-
-  // These tasks can be run from CodeSandbox. Running one will open a log in the app.
-  "tasks": {
-    "start": {
-      "name": "start",
-      "command": "pnpm start",
-      "runAtStart": true
-    },
-    "build": {
-      "name": "build",
-      "command": "pnpm build",
-      "runAtStart": false
-    },
-    "test": {
-      "name": "test",
-      "command": "pnpm test",
-      "runAtStart": false
-    },
-    "eject": {
-      "name": "eject",
-      "command": "pnpm eject",
-      "runAtStart": false
-    }
+  "name": "react-client",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "axios": "^1.7.2",
+    "firebase": "^10.12.2",
+    "lucide-react": "^0.395.0",
+    "@react-oauth/google": "^1.2.1"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "server": "cd server && python3 server.py",
+    "dev": "concurrently \"pnpm run start\" \"pnpm run server\""
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "react-scripts": "^5.0.1",
+    "concurrently": "^8.2.2" 
   }
 }
