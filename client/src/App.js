@@ -6,16 +6,6 @@ import {
   signInWithCustomToken,
   onAuthStateChanged,
 } from "firebase/auth";
-import {
-  getFirestore,
-  collection,
-  addDoc,
-  onSnapshot,
-  updateDoc,
-  deleteDoc,
-  doc,
-  query,
-} from "firebase/firestore";
 
 // Tailwind CSS is assumed to be available in the environment.
 // For icons, we'll use Lucide React icons.
@@ -77,6 +67,9 @@ const DAY_OF_WEEK_MAP = {
   6: "土",
 };
 
+// FlaskサーバーのURL
+const FLASK_SERVER_URL = "https://2p9ty2-5001.csb.app/";
+
 // --- Star Rating Component ---
 const StarRating = ({ rating, setRating, readOnly = false }) => {
   const [hover, setHover] = useState(0);
@@ -116,7 +109,8 @@ const StarRating = ({ rating, setRating, readOnly = false }) => {
 // --- Completion Feedback Modal Component ---
 // Modal for inputting feedback (concentration level and completion time) when a task is completed.
 const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
-  const [concentrationRating, setConcentrationRating] = useState(0); // Set default to 5
+  // デフォルトを0に変更 (ユーザーの要望)
+  const [concentrationRating, setConcentrationRating] = useState(0); 
   const [completionDateTime, setCompletionDateTime] = useState(() => {
     const now = new Date();
     // Generate YYYY-MM-DDTHH:MM format string
@@ -194,7 +188,7 @@ const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
 };
 
 function MainAppContent() {
-  const [db, setDb] = useState(null);
+  // const [db, setDb] = useState(null); // Firestore db state removed
   const [auth, setAuth] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -268,9 +262,9 @@ function MainAppContent() {
       }
 
       const app = initializeApp(firebaseConfig);
-      const firestore = getFirestore(app);
+      // const firestore = getFirestore(app); // Firestore initialization removed
       const firebaseAuth = getAuth(app);
-      setDb(firestore);
+      // setDb(firestore); // Setting db state removed
       setAuth(firebaseAuth);
 
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
@@ -390,115 +384,80 @@ function MainAppContent() {
     };
   }, []);
 
-  // --- Firestore Data Listener (Tasks) & Stats Calculation ---
-  useEffect(() => {
-    // Load tasks from Firestore only when logged in with Google
-    if (!db || !currentUserId || !isAuthReady || !googleUserInfo) {
-      console.log(
-        "Firestore tasks listener not ready (or not Google logged in). Clearing tasks.",
-        { db, currentUserId, isAuthReady, googleUserInfo }
-      );
-      setTasks([]); // Clear tasks if not logged in with Google
+  // --- Fetch Tasks from Flask Backend ---
+  const fetchTasks = async () => {
+    if (!currentUserId || !googleUserInfo) {
+      setTasks([]);
       return;
     }
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}`);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'タスクリストの取得に失敗しました');
+      }
+      let fetchedTasks = await response.json();
 
-    const tasksCollectionPath = `artifacts/${appId}/users/${currentUserId}/tasks`;
-    const tasksCollectionRef = collection(db, tasksCollectionPath);
-    const q = query(tasksCollectionRef);
-
-    const unsubscribe = onSnapshot(
-      q,
-      (querySnapshot) => {
-        let fetchedTasks = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-
-        // Sort tasks: uncompleted first, then by closest deadline, then by oldest creation date
-        fetchedTasks.sort((a, b) => {
+      // FireStoreと同様のソートロジックを適用
+      fetchedTasks.sort((a, b) => {
           if (a.completed !== b.completed) return a.completed ? 1 : -1;
-          const deadlineA = a.deadline
-            ? new Date(a.deadline).getTime()
-            : Infinity;
-          const deadlineB = b.deadline
-            ? new Date(b.deadline).getTime()
-            : Infinity;
+          const deadlineA = a.deadline ? new Date(a.deadline).getTime() : Infinity;
+          const deadlineB = b.deadline ? new Date(b.deadline).getTime() : Infinity;
           if (deadlineA !== deadlineB) return deadlineA - deadlineB;
           const createdAtA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const createdAtB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
           return createdAtA - createdAtB;
-        });
+      });
 
-        setTasks(fetchedTasks);
-
-        const now = new Date();
-        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const thirtyDaysAgo = new Date(
-          now.getTime() - 30 * 24 * 60 * 60 * 1000
-        );
-        const completedLast7Days = fetchedTasks.filter(
-          (t) =>
-            t.completed &&
-            t.completedAt &&
-            new Date(t.completedAt) >= sevenDaysAgo
-        ).length;
-        const completedLast30Days = fetchedTasks.filter(
-          (t) =>
-            t.completed &&
-            t.completedAt &&
-            new Date(t.completedAt) >= thirtyDaysAgo
-        ).length;
-        setTaskStats({ week: completedLast7Days, month: completedLast30Days });
-      },
-      (error) => {
-        console.error("Error fetching tasks:", error);
-        setMessage({
-          text: "課題の取得中にエラーが発生しました。",
-          type: "error",
-        });
-      }
-    );
-    return () => unsubscribe();
-  }, [db, currentUserId, isAuthReady, appId, googleUserInfo]); // Add googleUserInfo to dependency array
-
-  // --- Firestore Data Listener (Unavailable Slots) ---
-  useEffect(() => {
-    // Load fixed unavailability slots from Firestore only when logged in with Google
-    if (!db || !currentUserId || !isAuthReady || !googleUserInfo) {
-      console.log(
-        "Firestore unavailable slots listener not ready (or not Google logged in). Clearing slots.",
-        { db, currentUserId, isAuthReady, googleUserInfo }
-      );
-      setUserDefinedUnavailableSlots([]); // Clear fixed unavailability slots if not logged in with Google
-      return;
+      setTasks(fetchedTasks.filter(task => !task.hidden)); // hiddenなタスクは非表示
+      setMessage({ text: "課題リストを更新しました。", type: "info" });
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+      setMessage({ text: `課題の取得中にエラーが発生しました: ${error.message}`, type: "error" });
+    } finally {
+      setIsLoading(false);
     }
+  };
 
-    const unavailableSlotsCollectionPath = `artifacts/${appId}/users/${currentUserId}/unavailable_slots`;
-    const unavailableSlotsCollectionRef = collection(
-      db,
-      unavailableSlotsCollectionPath
-    );
-    const q = query(unavailableSlotsCollectionRef);
-
-    const unsubscribe = onSnapshot(
-      q,
-      (querySnapshot) => {
-        const fetchedSlots = querySnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setUserDefinedUnavailableSlots(fetchedSlots);
-      },
-      (error) => {
-        console.error("Error fetching unavailable slots:", error);
-        setMessage({
-          text: "固定の予定の取得中にエラーが発生しました。",
-          type: "error",
-        });
+  useEffect(() => {
+      if (currentUserId && googleUserInfo) { // 認証とGoogleログインが完了したら
+          fetchTasks();
+      } else {
+          setTasks([]); // ログアウト時や未認証時はタスクをクリア
       }
-    );
-    return () => unsubscribe();
-  }, [db, currentUserId, isAuthReady, appId, googleUserInfo]); // Add googleUserInfo to dependency array
+  }, [currentUserId, googleUserInfo]); // 依存配列にcurrentUserIdとgoogleUserInfoを追加
+
+  // --- Fetch Unavailable Slots from Flask Backend ---
+  const fetchUnavailableSlots = async () => {
+    if (!currentUserId || !googleUserInfo) {
+        setUserDefinedUnavailableSlots([]);
+        return;
+    }
+    setIsLoading(true);
+    try {
+        const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}`);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || '固定の予定リストの取得に失敗しました');
+        }
+        const fetchedSlots = await response.json();
+        setUserDefinedUnavailableSlots(fetchedSlots);
+    } catch (error) {
+        console.error("Error fetching unavailable slots:", error);
+        setMessage({ text: `固定の予定の取得中にエラーが発生しました: ${error.message}`, type: "error" });
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+      if (currentUserId && googleUserInfo) {
+          fetchUnavailableSlots();
+      } else {
+          setUserDefinedUnavailableSlots([]);
+      }
+  }, [currentUserId, googleUserInfo]);
 
   // --- Google Login & Calendar ---
   const handleGoogleLoginClick = () => {
@@ -579,18 +538,18 @@ function MainAppContent() {
     }
   };
 
-  // --- Helper function to generate recurring unavailability slots ---
+  // --- Helper function to generate recurring unavailability slots (no change, but note it's client-side) ---
+  // This client-side function is kept for consistency with how Google Calendar events were handled locally.
+  // However, the Flask backend's prepare_inputs_from_react will also handle unavailable slots from the API.
   const generateRecurringSlots = (
     unavailableSlots,
     searchStartDate,
     searchEndDate
   ) => {
     const generatedSlots = [];
-    // Ensure searchStartDate is at the beginning of its day for consistent iteration
     const startOfDaySearch = new Date(searchStartDate);
     startOfDaySearch.setHours(0, 0, 0, 0);
 
-    // Iterate through days within the search range
     for (
       let d = new Date(startOfDaySearch);
       d.getTime() <= searchEndDate.getTime();
@@ -599,8 +558,6 @@ function MainAppContent() {
       const currentDayOfWeek = d.getDay(); // 0 = Sunday, 1 = Monday, ... 6 = Saturday
 
       unavailableSlots.forEach((slot) => {
-        // slot.dayOfWeek is now an array, so use includes
-        // Check if slot.dayOfWeek exists and if the current day of the week is included
         const isMatchingDay =
           Array.isArray(slot.dayOfWeek) &&
           slot.dayOfWeek.includes(currentDayOfWeek.toString());
@@ -622,122 +579,22 @@ function MainAppContent() {
             0
           );
 
-          // Handle overnight slots (e.g., 23:00 to 07:00 next day)
           if (slotEnd.getTime() <= slotStart.getTime()) {
             slotEnd.setDate(slotEnd.getDate() + 1);
           }
 
-          // Only add if the slot overlaps with or is within the search range
-          // and the start time is not in the past relative to the current search start.
           if (slotEnd > searchStartDate && slotStart < searchEndDate) {
             generatedSlots.push({
               start: slotStart,
               end: slotEnd,
               summary: slot.label || "固定の予定",
-              isUserDefined: true, // Custom flag to identify user-defined slots
+              isUserDefined: true,
             });
           }
         }
       });
     }
     return generatedSlots;
-  };
-
-  // --- AI Scheduling Logic ---
-  const findAvailableTimeSlot = (
-    durationMinutes,
-    userDeadlineStr,
-    searchAfterDate = null
-  ) => {
-    const now = new Date();
-    // The search end date will be the user's desired deadline, or 30 days from now, whichever is earlier.
-    const searchUntil = userDeadlineStr
-      ? new Date(userDeadlineStr)
-      : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    // If the deadline is before the current time, there are no available slots.
-    if (searchUntil < now) return null;
-
-    const slotMs = durationMinutes * 60 * 1000;
-    // Adjust search start time (if searchAfterDate exists, then after that, otherwise current time or 7 AM today, whichever is later)
-    let searchStart = searchAfterDate
-      ? new Date(searchAfterDate.getTime() + 60000)
-      : new Date(Math.max(now.getTime(), new Date(now).setHours(7, 0, 0, 0)));
-    // Adjust searchStart so it does not exceed searchUntil
-    if (searchStart >= searchUntil) return null;
-
-    // Generate specific time slots for user-defined fixed unavailability within the search range
-    const userGeneratedBusySlots = generateRecurringSlots(
-      userDefinedUnavailableSlots,
-      searchStart,
-      searchUntil
-    );
-
-    // Combine Google Calendar events and user-defined fixed unavailability
-    // Filter out all-day Google Calendar events (those with event.start.date but no event.start.dateTime)
-    const allBusyPeriods = [
-      ...googleEvents
-        .filter((event) => event.start.dateTime) // Only target events with dateTime (exclude all-day events)
-        .map((event) => ({
-          start: new Date(event.start.dateTime),
-          end: new Date(event.end.dateTime),
-        })),
-      ...userGeneratedBusySlots.map((slot) => ({
-        start: slot.start,
-        end: slot.end,
-      })),
-    ];
-
-    // Sort all time slots by start time
-    allBusyPeriods.sort((a, b) => a.start.getTime() - b.start.getTime());
-
-    // Merge overlapping time slots
-    const mergedBusyPeriods = [];
-    if (allBusyPeriods.length > 0) {
-      let currentMerged = { ...allBusyPeriods[0] };
-      for (let i = 1; i < allBusyPeriods.length; i++) {
-        const nextPeriod = allBusyPeriods[i];
-        // If the next period overlaps or touches the current merged period
-        if (nextPeriod.start.getTime() <= currentMerged.end.getTime()) {
-          currentMerged.end = new Date(
-            Math.max(currentMerged.end.getTime(), nextPeriod.end.getTime())
-          );
-        } else {
-          mergedBusyPeriods.push(currentMerged);
-          currentMerged = { ...nextPeriod };
-        }
-      }
-      mergedBusyPeriods.push(currentMerged);
-    }
-
-    // Current starting point for finding available time slots
-    let lastAvailableTime = searchStart;
-
-    for (const period of mergedBusyPeriods) {
-      // If the start of the current busy period is after our last available time
-      // Check if there's enough free time in between
-      if (period.start.getTime() > lastAvailableTime.getTime()) {
-        if (period.start.getTime() - lastAvailableTime.getTime() >= slotMs) {
-          const potentialEnd = new Date(lastAvailableTime.getTime() + slotMs);
-          // Make sure the proposed slot does not exceed the search end date
-          if (potentialEnd <= searchUntil) {
-            return { start: lastAvailableTime, end: potentialEnd };
-          }
-        }
-      }
-      // Update lastAvailableTime to the end time of the current busy period
-      // (or keep it if the existing lastAvailableTime is later)
-      lastAvailableTime = new Date(
-        Math.max(lastAvailableTime.getTime(), period.end.getTime())
-      );
-    }
-
-    // After checking all busy periods, check if there's an available slot after the last busy period
-    const finalPotentialEnd = new Date(lastAvailableTime.getTime() + slotMs);
-    if (finalPotentialEnd <= searchUntil) {
-      return { start: lastAvailableTime, end: finalPotentialEnd };
-    }
-
-    return null;
   };
 
   // --- Google Calendar Event Management ---
@@ -755,7 +612,7 @@ function MainAppContent() {
         text: "Googleカレンダー連携が有効ではありません。イベントを追加できません。",
         type: "warning",
       });
-      return false;
+      return { success: false };
     }
 
     setIsLoading(true);
@@ -765,7 +622,7 @@ function MainAppContent() {
         description: description,
         start: {
           dateTime: startTime.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, // Get local timezone
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
         end: {
           dateTime: endTime.toISOString(),
@@ -800,7 +657,7 @@ function MainAppContent() {
         text: `課題をGoogleカレンダーに追加しました: ${data.htmlLink}`,
         type: "success",
       });
-      return { success: true, eventId: data.id }; // Return event ID
+      return { success: true, eventId: data.id };
     } catch (error) {
       console.error("Error adding event to Google Calendar:", error);
       setMessage({
@@ -813,7 +670,6 @@ function MainAppContent() {
     }
   };
 
-  // New function to delete an event from Google Calendar
   const deleteEventFromGoogleCalendar = async (eventId) => {
     if (!googleAccessToken) {
       console.warn(
@@ -839,8 +695,6 @@ function MainAppContent() {
       );
 
       if (!response.ok) {
-        // A 204 No Content response is expected for successful deletion.
-        // If it's not ok and not a 204, then it's an error.
         if (response.status !== 204) {
           const errorData = await response.json();
           console.error(
@@ -873,8 +727,7 @@ function MainAppContent() {
   };
 
   // --- Task Management ---
-  const requestAiSuggestion = async (searchAfter = null) => {
-    // Google login required
+  const requestAiSuggestion = async () => { // searchAfter removed, AI handles from current time
     if (!googleUserInfo) {
       setMessage({
         text: "AI提案を利用するにはGoogleログインが必要です。",
@@ -882,44 +735,59 @@ function MainAppContent() {
       });
       return;
     }
+    if (!newTaskTitle.trim() || !newTaskEstimate.trim()) {
+      setMessage({ text: "課題タイトルと見積もり時間は必須です。", type: "error" });
+      return;
+    }
 
     setIsLoading(true);
-    // Always fetch the latest Google Calendar events
-    await fetchGoogleCalendarEvents(googleAccessToken);
+    try {
+        const response = await fetch(`${FLASK_SERVER_URL}/suggest-slot`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                userId: currentUserId,
+                task: {
+                    id: 'temp-' + Date.now(), // 一時的なID
+                    title: newTaskTitle,
+                    estimatedTime: parseInt(newTaskEstimate),
+                    deadline: newTaskDeadline || null, // 期限がない場合も考慮
+                },
+                unavailableSlots: userDefinedUnavailableSlots, // 固定の予定もAIに渡す
+                // Google Calendar イベントもAIに渡す場合はここに追加
+                // googleEvents: googleEvents.map(e => ({ start: e.start, end: e.end, summary: e.summary })),
+            }),
+        });
 
-    const suggestedSlot = findAvailableTimeSlot(
-      parseInt(newTaskEstimate),
-      newTaskDeadline,
-      searchAfter
-    );
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'AI提案の取得に失敗しました');
+        }
 
-    if (suggestedSlot) {
-      setAiDateSuggestion({
-        title: newTaskTitle,
-        estimatedTime: newTaskEstimate,
-        suggestedSlot,
-      });
-    } else {
-      setMessage({
-        text: "AIが空き時間を見つけられませんでした。手動で期限を設定するか、別の時間で再検索してください。",
-        type: "info",
-      });
+        const suggestion = await response.json();
+        setAiDateSuggestion({
+            title: newTaskTitle,
+            estimatedTime: newTaskEstimate,
+            suggestedSlot: { // バックエンドから返る形式に合わせる
+                start: new Date(suggestion.start),
+                end: new Date(suggestion.end),
+            },
+        });
+        setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
+    } catch (error) {
+        console.error("Error requesting AI suggestion:", error);
+        setMessage({ text: `AI提案中にエラーが発生しました: ${error.message}`, type: "error" });
+    } finally {
+        setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   const confirmAndAddTask = async () => {
-    // Google login required
-    if (!googleUserInfo) {
+    if (!googleUserInfo || !currentUserId || !aiDateSuggestion) {
       setMessage({
-        text: "課題を保存するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!db || !currentUserId || !aiDateSuggestion) {
-      setMessage({
-        text: "Firestoreが利用できないか、AI提案が確定していません。",
+        text: "必要な情報が揃っていません。",
         type: "error",
       });
       return;
@@ -927,64 +795,62 @@ function MainAppContent() {
 
     setIsLoading(true);
     const { title, estimatedTime, suggestedSlot } = aiDateSuggestion;
-    // --- ここから修正 ---
-    // ISO 8601形式の完全なタイムスタンプを期限として保存
-    const finalDeadline = suggestedSlot.start.toISOString();
-    // --- ここまで修正 ---
+    const finalDeadline = suggestedSlot.start.toISOString().split("T")[0];
 
     try {
-      const tasksCollectionRef = collection(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`
-      );
-      let googleEventId = null; // Initialize googleEventId
-
-      // Add event to Google Calendar if successful, store the event ID
+      let googleEventId = null;
       if (googleAccessToken) {
         const eventDescription = `見積もり時間: ${estimatedTime}分`;
         const addEventResult = await addEventToGoogleCalendar(
-          title,
-          suggestedSlot.start,
-          suggestedSlot.end,
-          eventDescription
+          title, suggestedSlot.start, suggestedSlot.end, eventDescription
         );
         if (addEventResult.success) {
           googleEventId = addEventResult.eventId;
         } else {
-          // If adding to Google Calendar fails, decide whether to proceed with task creation.
-          // For now, we'll proceed but log the warning.
-          console.warn(
-            "Failed to add event to Google Calendar, proceeding without event ID."
-          );
+          console.warn("Failed to add event to Google Calendar.");
         }
       }
 
-      const taskData = {
-        title,
-        estimatedTime: parseInt(estimatedTime),
-        deadline: finalDeadline, // 修正後の期限を保存
-        completed: false,
-        createdAt: new Date().toISOString(),
-        completedAt: null,
-        concentrationLevel: null,
-        hidden: false,
-        googleEventId: googleEventId, // Store the Google Calendar event ID
-      };
-      await addDoc(tasksCollectionRef, taskData);
+      // 新しいタスクをバックエンドAPIを通じて追加
+      const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              userId: currentUserId,
+              task: {
+                  title,
+                  estimatedTime: parseInt(estimatedTime),
+                  deadline: finalDeadline,
+                  completed: false,
+                  createdAt: new Date().toISOString(),
+                  completedAt: null,
+                  concentrationLevel: null,
+                  hidden: false,
+                  googleEventId: googleEventId,
+                  rescheduled: false,
+              },
+          }),
+      });
+
+      if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'タスクの追加に失敗しました');
+      }
+
       setMessage({ text: `課題「${title}」を追加しました！`, type: "success" });
 
-      // Reset form
+      fetchTasks(); // 成功後、タスクリストを更新するために再フェッチ
+
+      // フォームをリセット
       setNewTaskTitle("");
       setNewTaskEstimate("");
       setNewTaskDeadline("");
       setAiDateSuggestion(null);
       setEditingTask(null);
+
     } catch (error) {
-      console.error("Error adding task with AI date:", error);
-      setMessage({
-        text: "課題の追加中にエラーが発生しました。",
-        type: "error",
-      });
+      console.error("Error confirming and adding task:", error);
+      setMessage({ text: `課題の追加中にエラーが発生しました: ${error.message}`, type: "error" });
     } finally {
       setIsLoading(false);
     }
@@ -1007,8 +873,6 @@ function MainAppContent() {
     }
 
     // AI suggestion mode
-    // If GoogleAccessToken is available and estimated time is provided, it's AI suggestion mode.
-    // However, if AI suggestion is not needed, prompt for manual input.
     if (googleAccessToken && newTaskEstimate.trim() && !editingTask) {
       requestAiSuggestion();
     } else {
@@ -1021,10 +885,9 @@ function MainAppContent() {
         return;
       }
 
-      // Check for Firestore and user ID availability
-      if (!db || !currentUserId) {
+      if (!currentUserId) {
         setMessage({
-          text: "データベースの準備ができていません。",
+          text: "ユーザー情報が取得できません。",
           type: "error",
         });
         return;
@@ -1032,22 +895,10 @@ function MainAppContent() {
 
       setIsLoading(true);
       try {
-        const tasksCollectionRef = collection(
-          db,
-          `artifacts/${appId}/users/${currentUserId}/tasks`
-        );
-        
-        // --- ここから修正 ---
-        // 手動入力の場合も、日付の終わりに時刻を設定してISO文字列で保存
-        const deadlineDate = new Date(newTaskDeadline);
-        deadlineDate.setHours(23, 59, 59, 999);
-        const finalDeadline = deadlineDate.toISOString();
-        // --- ここまで修正 ---
-
         const taskData = {
           title: newTaskTitle,
           estimatedTime: parseInt(newTaskEstimate),
-          deadline: finalDeadline, // 修正後の期限を保存
+          deadline: newTaskDeadline,
           completed: false,
           createdAt: new Date().toISOString(),
           completedAt: null,
@@ -1057,31 +908,39 @@ function MainAppContent() {
         };
 
         if (editingTask) {
-          const taskDocRef = doc(
-            db,
-            `artifacts/${appId}/users/${currentUserId}/tasks`,
-            editingTask.id
-          );
-          // 編集時もdeadlineをISO文字列に
-          const editDeadlineDate = new Date(newTaskDeadline);
-          editDeadlineDate.setHours(23, 59, 59, 999);
-          await updateDoc(taskDocRef, {
-            ...taskData,
-            deadline: editDeadlineDate.toISOString(),
-          });
-          setMessage({
-            text: `課題「${newTaskTitle}」を更新しました！`,
-            type: "success",
-          });
+            const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${editingTask.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(taskData),
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || '課題の更新に失敗しました');
+            }
+            setMessage({
+                text: `課題「${newTaskTitle}」を更新しました！`,
+                type: "success",
+            });
         } else {
-          await addDoc(tasksCollectionRef, taskData);
-          setMessage({
-            text: `課題「${newTaskTitle}」を追加しました！`,
-            type: "success",
-          });
+            const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: currentUserId,
+                    task: taskData,
+                }),
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || '課題の追加に失敗しました');
+            }
+            setMessage({
+                text: `課題「${newTaskTitle}」を追加しました！`,
+                type: "success",
+            });
         }
         
-        // Reset form
+        fetchTasks(); // リストを更新
         setNewTaskTitle("");
         setNewTaskEstimate("");
         setNewTaskDeadline("");
@@ -1099,7 +958,6 @@ function MainAppContent() {
   };
 
   const startEditTask = (task) => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "課題を編集するにはGoogleログインが必要です。",
@@ -1110,15 +968,12 @@ function MainAppContent() {
     setEditingTask(task);
     setNewTaskTitle(task.title);
     setNewTaskEstimate(task.estimatedTime?.toString() || "");
-    // deadlineがISO文字列なので、YYYY-MM-DD形式に変換して表示
-    setNewTaskDeadline(task.deadline ? task.deadline.split("T")[0] : "");
+    setNewTaskDeadline(task.deadline || "");
     setShowTaskInput(true);
     if (taskInputRef.current) taskInputRef.current.focus();
   };
 
-  // Function to toggle task completion status
   const toggleTaskCompletion = async (taskId, currentStatus) => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "課題の完了状態を更新するにはGoogleログインが必要です。",
@@ -1126,9 +981,9 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
@@ -1143,37 +998,39 @@ function MainAppContent() {
     // If changing from uncompleted to completed
     if (!currentStatus) {
       const now = new Date();
-      // --- ここから修正 ---
-      // 期限の比較をDateオブジェクト同士で行う
-      const deadlineDate = taskToUpdate.deadline ? new Date(taskToUpdate.deadline) : null;
-      // --- ここまで修正 ---
+      now.setHours(0, 0, 0, 0);
 
-      // If a deadline is set and it's not past 
+      const deadlineDate = taskToUpdate.deadline
+        ? new Date(taskToUpdate.deadline)
+        : null;
+      if (deadlineDate) {
+        deadlineDate.setHours(0, 0, 0, 0);
+      }
+
       if (deadlineDate && deadlineDate >= now) {
-        // Display modal for concentration and completion time
         setShowCompletionFeedbackModalForTask(taskToUpdate);
-        return; // Do not update Firestore here, update after input from modal
+        return;
       } else if (taskToUpdate.googleEventId) {
-        // If task is completed outside the deadline or no deadline, but has a Google Event ID, delete it.
         await deleteEventFromGoogleCalendar(taskToUpdate.googleEventId);
       }
     } else {
-      // If changing from completed back to uncompleted, clear googleEventId in Firestore
-      // We don't re-add to Google Calendar here, it needs to be rescheduled.
       setIsLoading(true);
       try {
-        const taskDocRef = doc(
-          db,
-          `artifacts/${appId}/users/${currentUserId}/tasks`,
-          taskId
-        );
-        await updateDoc(taskDocRef, {
-          completed: false,
-          completedAt: null,
-          concentrationLevel: null,
-          hidden: false,
-          googleEventId: null, // Clear the Google event ID when reverting to uncompleted
+        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                completed: false,
+                completedAt: null,
+                concentrationLevel: null,
+                hidden: false,
+                googleEventId: null, // Clear the Google event ID when reverting to uncompleted
+            }),
         });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
+        }
         setMessage({ text: "課題を未完了に戻しました。", type: "info" });
       } catch (error) {
         console.error("Error reverting task completion:", error);
@@ -1187,24 +1044,26 @@ function MainAppContent() {
       return;
     }
 
-    // For expired tasks or tasks without deadline, directly update completion without concentration input
     setIsLoading(true);
     try {
-      const taskDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`,
-        taskId
-      );
-      await updateDoc(taskDocRef, {
-        completed: true,
-        completedAt: new Date().toISOString(), // Record current time
-        // concentrationLevel remains null, hidden remains false
-        // These are set via the modal
-      });
-      setMessage({
-        text: "課題を完了しました！お疲れ様でした。",
-        type: "success",
-      });
+        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                completed: true,
+                completedAt: new Date().toISOString(),
+                // concentrationLevel remains null here, set by modal
+                // hidden remains false here, set by modal
+            }),
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
+        }
+        setMessage({
+            text: "課題を完了しました！お疲れ様でした。",
+            type: "success",
+        });
     } catch (error) {
       console.error("Error toggling task completion:", error);
       setMessage({
@@ -1216,24 +1075,14 @@ function MainAppContent() {
     }
   };
 
-  // Function to finalize task completion after entering concentration and completion time
   const handleConfirmCompletion = async (
     taskId,
     concentration,
     completionTime
   ) => {
-    // Google login required
-    if (!googleUserInfo) {
+    if (!googleUserInfo || !currentUserId) {
       setMessage({
         text: "課題の完了情報を保存するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      setShowCompletionFeedbackModalForTask(null);
-      return;
-    }
-    if (!db || !currentUserId) {
-      setMessage({
-        text: "データベースの準備ができていません。",
         type: "error",
       });
       setShowCompletionFeedbackModalForTask(null);
@@ -1242,32 +1091,56 @@ function MainAppContent() {
 
     setIsLoading(true);
     try {
-      const taskDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`,
-        taskId
-      );
       const taskToComplete = tasks.find((task) => task.id === taskId);
 
-      // Update task in Firestore
-      await updateDoc(taskDocRef, {
-        completed: true,
-        completedAt: completionTime.toISOString(), // Completion time entered in modal
-        concentrationLevel: concentration,
-        hidden: true, // Hide from list after completion
+      // フィードバックをバックエンドAPIに送信
+      const feedbackResponse = await fetch(`${FLASK_SERVER_URL}/feedback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              userId: currentUserId,
+              completionTime: completionTime.toISOString(),
+              concentrationRating: concentration,
+          }),
       });
 
-      // If the task has a Google Calendar event ID, delete it
+      if (!feedbackResponse.ok) {
+          const errorData = await feedbackResponse.json();
+          throw new Error(errorData.error || 'フィードバックの送信に失敗しました');
+      }
+
+      // タスクの完了ステータスをバックエンドAPIを通じて更新
+      const updateTaskResponse = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              completed: true,
+              completedAt: completionTime.toISOString(),
+              concentrationLevel: concentration,
+              hidden: true, // Hide from list after completion
+          }),
+      });
+
+      if (!updateTaskResponse.ok) {
+          const errorData = await updateTaskResponse.json();
+          throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
+      }
+
       if (taskToComplete && taskToComplete.googleEventId) {
         await deleteEventFromGoogleCalendar(taskToComplete.googleEventId);
-        // After successful deletion, clear the googleEventId from Firestore as well
-        await updateDoc(taskDocRef, { googleEventId: null });
+        // Google Event IDをAPIを通じてクリア
+        await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ googleEventId: null }),
+        });
       }
 
       setMessage({
-        text: "素晴らしい！集中して課題を終えましたね！報酬獲得！", // Reward message
+        text: "素晴らしい！集中して課題を終えましたね！報酬獲得！",
         type: "success",
       });
+      fetchTasks(); // リストを更新
     } catch (error) {
       console.error("Error saving concentrated completion:", error);
       setMessage({
@@ -1281,7 +1154,6 @@ function MainAppContent() {
   };
 
   const deleteTask = async (taskId) => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "課題を削除するにはGoogleログインが必要です。",
@@ -1289,41 +1161,43 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
     }
+    setIsLoading(true);
     try {
-      const taskDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`,
-        taskId
-      );
       const taskToDelete = tasks.find((task) => task.id === taskId);
 
-      // If the task has a Google Calendar event ID, delete it from Google Calendar first
       if (taskToDelete && taskToDelete.googleEventId) {
         await deleteEventFromGoogleCalendar(taskToDelete.googleEventId);
       }
 
-      await deleteDoc(taskDocRef);
+      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+          method: 'DELETE',
+      });
+
+      if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'タスクの削除に失敗しました');
+      }
       setMessage({ text: "課題を削除しました。", type: "info" });
+      fetchTasks(); // リストを更新
     } catch (error) {
       console.error("Error deleting task:", error);
       setMessage({
         text: "課題の削除中にエラーが発生しました。",
         type: "error",
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const saveConcentration = async (taskId, rating) => {
-    // Google login required
-    // This function is used when recording concentration after re-entering expired tasks,
-    // so leave Google login check in case it's separated from toggleTaskCompletion.
     if (!googleUserInfo) {
       setMessage({
         text: "集中度を記録するにはGoogleログインが必要です。",
@@ -1331,9 +1205,9 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
@@ -1345,25 +1219,31 @@ function MainAppContent() {
       });
       return;
     }
+    setIsLoading(true);
     try {
-      const taskDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`,
-        taskId
-      );
-      await updateDoc(taskDocRef, { concentrationLevel: rating, hidden: true });
-      setMessage({
-        text: "集中度を記録しました！お疲れ様でした。",
-        type: "success",
-      });
+        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ concentrationLevel: rating, hidden: true }),
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || '集中度の保存に失敗しました');
+        }
+        setMessage({
+            text: "集中度を記録しました！お疲れ様でした。",
+            type: "success",
+        });
+        fetchTasks(); // リストを更新
     } catch (error) {
       console.error("Error saving concentration:", error);
       setMessage({ text: "集中度の保存に失敗しました。", type: "error" });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const rescheduleTask = async (taskId) => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "課題を再入力するにはGoogleログインが必要です。",
@@ -1371,9 +1251,9 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
@@ -1388,27 +1268,31 @@ function MainAppContent() {
     }
     setIsLoading(true);
     try {
-      const taskDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/tasks`,
-        taskId
-      );
       const taskToReschedule = tasks.find((task) => task.id === taskId);
 
-      // If the task has a Google Calendar event ID, delete it before rescheduling
       if (taskToReschedule && taskToReschedule.googleEventId) {
         await deleteEventFromGoogleCalendar(taskToReschedule.googleEventId);
       }
 
-      await updateDoc(taskDocRef, {
-        estimatedTime: parseInt(additionalTime), // Overwrite existing estimated time
-        deadline: null, // Reset deadline
-        completed: false,
-        rescheduled: true, // Reschedule flag
-        googleEventId: null, // Clear Google Event ID after deletion
+      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+              estimatedTime: parseInt(additionalTime), // Overwrite existing estimated time
+              deadline: null, // Reset deadline
+              completed: false,
+              rescheduled: true, // Reschedule flag
+              googleEventId: null, // Clear Google Event ID after deletion
+          }),
       });
+
+      if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || '課題の再入力に失敗しました');
+      }
       setMessage({ text: "課題を再入力しました。", type: "success" });
       setRescheduleInputs((prev) => ({ ...prev, [taskId]: "" })); // Clear input field
+      fetchTasks(); // リストを更新
     } catch (error) {
       console.error("Error rescheduling task:", error);
       setMessage({ text: "課題の再入力に失敗しました。", type: "error" });
@@ -1436,7 +1320,6 @@ function MainAppContent() {
   };
 
   const handleAddUnavailableSlot = async () => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "固定の予定を保存するにはGoogleログインが必要です。",
@@ -1444,9 +1327,9 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
@@ -1473,15 +1356,11 @@ function MainAppContent() {
       return;
     }
 
-    // More robust time validation
     const [startHour, startMinute] = newUnavailableStartTime
       .split(":")
       .map(Number);
     const [endHour, endMinute] = newUnavailableEndTime.split(":").map(Number);
 
-    // Error if start time is after end time (unless it spans across days)
-    // E.g., 10:00 -> 09:00 is an error.
-    // E.g., 23:00 -> 07:00 is not an error as it spans across days (judged by endHour < startHour)
     if (
       startHour * 60 + startMinute > endHour * 60 + endMinute &&
       !(endHour < startHour)
@@ -1495,14 +1374,10 @@ function MainAppContent() {
 
     setIsLoading(true);
     try {
-      const unavailableSlotsCollectionRef = collection(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/unavailable_slots`
-      );
       const slotData = {
-        dayOfWeek: selectedUnavailableDays, // Save as an array
-        startTime: newUnavailableStartTime, // "HH:MM"
-        endTime: newUnavailableEndTime, // "HH:MM"
+        dayOfWeek: selectedUnavailableDays,
+        startTime: newUnavailableStartTime,
+        endTime: newUnavailableEndTime,
         label:
           newUnavailableLabel.trim() ||
           `毎週 ${selectedUnavailableDays
@@ -1510,28 +1385,36 @@ function MainAppContent() {
             .join(", ")} の固定予定`,
         createdAt: new Date().toISOString(),
       };
-      await addDoc(unavailableSlotsCollectionRef, slotData);
+      const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: currentUserId, slot: slotData }),
+      });
+      if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || '固定の予定の追加に失敗しました');
+      }
       setMessage({
         text: `固定の予定「${slotData.label}」を追加しました！`,
         type: "success",
       });
+      fetchUnavailableSlots(); // リストを更新
       setSelectedUnavailableDays([]);
       setNewUnavailableStartTime("09:00");
       setNewUnavailableEndTime("17:00");
       setNewUnavailableLabel("");
     } catch (error) {
-      console.error("Firebase Error adding unavailable slot:", error);
+      console.error("Error adding unavailable slot:", error);
       setMessage({
         text: `固定の予定の追加中にエラーが発生しました: ${error.message}`,
         type: "error",
-      }); // Display error message from Firestore
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDeleteUnavailableSlot = async (slotId) => {
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "固定の予定を削除するにはGoogleログインが必要です。",
@@ -1539,27 +1422,32 @@ function MainAppContent() {
       });
       return;
     }
-    if (!db || !currentUserId) {
+    if (!currentUserId) {
       setMessage({
-        text: "データベースの準備ができていません。",
+        text: "ユーザー情報が取得できません。",
         type: "error",
       });
       return;
     }
+    setIsLoading(true);
     try {
-      const slotDocRef = doc(
-        db,
-        `artifacts/${appId}/users/${currentUserId}/unavailable_slots`,
-        slotId
-      );
-      await deleteDoc(slotDocRef);
+      const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}/${slotId}`, {
+          method: 'DELETE',
+      });
+      if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || '固定の予定の削除に失敗しました');
+      }
       setMessage({ text: "固定の予定を削除しました。", type: "info" });
+      fetchUnavailableSlots(); // リストを更新
     } catch (error) {
       console.error("Error deleting unavailable slot:", error);
       setMessage({
         text: "固定の予定の削除中にエラーが発生しました。",
         type: "error",
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -1568,29 +1456,25 @@ function MainAppContent() {
     if (task.completed) return "bg-green-100 border-green-500";
     if (task.deadline) {
       const today = new Date();
-      // --- ここから修正 ---
-      const deadlineDate = new Date(task.deadline); // deadlineはISO文字列なのでそのままDateオブジェクトに
+      today.setHours(0, 0, 0, 0);
+      const deadlineDate = new Date(task.deadline);
+      deadlineDate.setHours(0, 0, 0, 0);
       const tomorrow = new Date();
       tomorrow.setDate(today.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0); // 日付の比較のために時刻をリセット
+      tomorrow.setHours(0, 0, 0, 0);
       const threeDaysFromNow = new Date();
       threeDaysFromNow.setDate(today.getDate() + 3);
       threeDaysFromNow.setHours(0, 0, 0, 0);
-
-      if (deadlineDate < today) return "bg-red-100 border-red-500 animate-pulse-fast"; // 期限切れ
-      
-      const deadlineDayStart = new Date(deadlineDate);
-      deadlineDayStart.setHours(0,0,0,0);
-      
-      if (deadlineDayStart <= tomorrow) return "bg-red-100 border-red-500"; // 明日までの期限
-      if (deadlineDayStart <= threeDaysFromNow) return "bg-yellow-100 border-yellow-500"; // 3日以内の期限
-      // --- ここまで修正 ---
+      if (deadlineDate < today)
+        return "bg-red-100 border-red-500 animate-pulse-fast"; // Expired
+      if (deadlineDate <= tomorrow) return "bg-red-100 border-red-500"; // Deadline by tomorrow
+      if (deadlineDate <= threeDaysFromNow)
+        return "bg-yellow-100 border-yellow-500"; // Deadline within 3 days
     }
     if (task.rescheduled) return "bg-blue-100 border-blue-500"; // Rescheduled task
     return "bg-indigo-50 border-indigo-300"; // Default
   };
 
-  // If not logged in with Google, clear visible tasks and fixed unavailability slots
   const visibleTasks = googleUserInfo
     ? tasks.filter((task) => !task.hidden)
     : [];
@@ -1598,7 +1482,6 @@ function MainAppContent() {
     ? userDefinedUnavailableSlots
     : [];
 
-  // Loading display when authentication is not ready yet
   if (!isAuthReady) {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-purple-100 to-indigo-200 flex flex-col items-center justify-center z-50">
@@ -1765,9 +1648,7 @@ function MainAppContent() {
                   <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
                 </button>
                 <button
-                  onClick={() =>
-                    requestAiSuggestion(aiDateSuggestion.suggestedSlot.end)
-                  }
+                  onClick={requestAiSuggestion} // Call AI again for another suggestion
                   className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
                 >
                   <RefreshCw className="h-4 w-4 mr-1.5" /> もう一度
@@ -2040,7 +1921,6 @@ function MainAppContent() {
                     </div>
                   </div>
 
-                  {/* Display concentration input for overdue tasks */}
                   {task.completed && task.concentrationLevel === null && (
                     <div className="mt-3 pt-3 border-t border-green-200">
                       <div className="flex items-center gap-2">
@@ -2158,7 +2038,7 @@ function MainAppContent() {
       <style>{`
         @keyframes fade-in-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
         .animate-fade-in-down { animation: fade-in-down 0.4s ease-out forwards; }
-        @keyframes pulse-fast { 0%, 100% { opacity: 1; } 50% { opacity: .7; } }
+        @keyframes pulse-fast { 0%, 100% { opacity: 1; } 50% { opacity: .7; } }\
         .animate-pulse-fast { animation: pulse-fast 1s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
       `}</style>
     </div>
@@ -2193,4 +2073,3 @@ export default function App() {
   // GOOGLE_CLIENT_ID check is done inside MainAppContent, so it's removed from here.
   return <MainAppContent />;
 }
-
