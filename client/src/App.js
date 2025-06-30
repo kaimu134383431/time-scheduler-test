@@ -20,10 +20,10 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
-  Edit3,
+  // Edit3, // 編集ボタンを削除するためコメントアウト
   Trash2,
-  RotateCcw,
-  Repeat, // For rescheduling
+  // RotateCcw, // 再入力機能を削除するためコメントアウト
+  // Repeat, // 再入力機能を削除するためコメントアウト
   BarChart, // For stats
   Star, // For ratings
   ThumbsUp,
@@ -31,6 +31,7 @@ import {
   XCircle,
   Clock9, // For fixed unavailability
   CalendarCheck, // For fixed unavailability list
+  Rewind, // スキップアイコン用
 } from "lucide-react";
 
 // Firebase configuration placeholder - This setting will be overwritten by __firebase_config provided by the Canvas environment.
@@ -110,16 +111,30 @@ const StarRating = ({ rating, setRating, readOnly = false }) => {
 // Modal for inputting feedback (concentration level and completion time) when a task is completed.
 const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
   // デフォルトを0に変更 (ユーザーの要望)
-  const [concentrationRating, setConcentrationRating] = useState(0); 
+  const [concentrationRating, setConcentrationRating] = useState(0);
   const [completionDateTime, setCompletionDateTime] = useState(() => {
     const now = new Date();
-    // Generate YYYY-MM-DDTHH:MM format string
-    return `${now.getFullYear()}-${(now.getMonth() + 1)
-      .toString()
-      .padStart(2, "0")}-${now.getDate().toString().padStart(2, "0")}T${now
-      .getHours()
-      .toString()
-      .padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
+    // 日本時間でYYYY-MM-DDTHH:MM形式の文字列を生成
+    const options = {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23", // 24時間表示
+      timeZone: "Asia/Tokyo", // 明示的に日本時間を指定
+    };
+    const formatter = new Intl.DateTimeFormat("ja-JP", options);
+    // formatter.formatToParts() を呼び出して、その結果の配列から各部分を取得
+    const parts = formatter.formatToParts(now);
+
+    const year = parts.find((p) => p.type === "year").value;
+    const month = parts.find((p) => p.type === "month").value;
+    const day = parts.find((p) => p.type === "day").value;
+    const hour = parts.find((p) => p.type === "hour").value;
+    const minute = parts.find((p) => p.type === "minute").value;
+
+    return `${year}-${month}-${day}T${hour}:${minute}`;
   });
 
   const handleSave = () => {
@@ -128,14 +143,21 @@ const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
 
   if (!task) return null;
 
+  // 課題が期限切れかどうかを判定 (現在時刻を考慮)
+  const isOverdue =
+    task.end && new Date() > new Date(task.end) && !task.completed;
+
   return (
     <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md space-y-5 transform animate-fade-in-down">
         <h2 className="text-2xl font-bold text-center text-indigo-700">
-          課題完了おめでとうございます！
+          {isOverdue ? "課題の完了処理" : "課題完了おめでとうございます！"}
         </h2>
         <p className="text-center text-gray-600 text-lg">
-          「<span className="font-semibold">{task.title}</span>」を完了しました
+          「<span className="font-semibold">{task.title}</span>」を完了します
+          {isOverdue && (
+            <span className="text-red-500 font-bold ml-2">(期限切れ)</span>
+          )}
         </p>
 
         <div className="space-y-4">
@@ -198,9 +220,9 @@ function MainAppContent() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskEstimate, setNewTaskEstimate] = useState("");
   const [newTaskDeadline, setNewTaskDeadline] = useState("");
-  const [editingTask, setEditingTask] = useState(null);
+  // const [editingTask, setEditingTask] = useState(null); // 編集機能削除のためコメントアウト
 
-  const [rescheduleInputs, setRescheduleInputs] = useState({});
+  // const [rescheduleInputs, setRescheduleInputs] = useState({}); // 再入力機能削除のためコメントアウト
 
   const [taskStats, setTaskStats] = useState({ week: 0, month: 0 });
 
@@ -262,27 +284,22 @@ function MainAppContent() {
       }
 
       const app = initializeApp(firebaseConfig);
-      // const firestore = getFirestore(app); // Firestore initialization removed
       const firebaseAuth = getAuth(app);
-      // setDb(firestore); // Setting db state removed
       setAuth(firebaseAuth);
 
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
         if (!authCheckCompletedRef.current) {
-          // Run only once initially
-          authCheckCompletedRef.current = true; // Mark check as complete
+          authCheckCompletedRef.current = true;
 
           if (user) {
             setCurrentUserId(user.uid);
           } else {
-            // If initialAuthToken is available, sign in with custom token, otherwise sign in anonymously
             try {
               if (initialAuthToken) {
                 await signInWithCustomToken(firebaseAuth, initialAuthToken);
               } else {
                 await signInAnonymously(firebaseAuth);
               }
-              // After signing in, set the current user ID
               if (firebaseAuth.currentUser) {
                 setCurrentUserId(firebaseAuth.currentUser.uid);
               } else {
@@ -297,7 +314,6 @@ function MainAppContent() {
                 text: "認証中にエラーが発生しました。匿名で続行します。",
                 type: "error",
               });
-              // Even if an error occurs, try to sign in anonymously
               try {
                 await signInAnonymously(firebaseAuth);
                 if (firebaseAuth.currentUser) {
@@ -315,7 +331,6 @@ function MainAppContent() {
               }
             }
           }
-          // Once all initial authentication processes are complete, set isAuthReady to true
           setIsAuthReady(true);
         }
       });
@@ -326,13 +341,12 @@ function MainAppContent() {
         text: "Firebaseの初期化に失敗しました。ページをリロードしてください。",
         type: "error",
       });
-      setIsAuthReady(true); // Release loading screen even on initialization error
+      setIsAuthReady(true);
     }
   }, []);
 
   // --- Google GSI Client Initialization ---
   useEffect(() => {
-    // Check if GOOGLE_CLIENT_ID is set
     if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID === "YOUR_GOOGLE_CLIENT_ID") {
       setMessage({
         text: "Google OAuth Client IDが設定されていません。管理者に連絡してください。",
@@ -392,71 +406,86 @@ function MainAppContent() {
     }
     setIsLoading(true);
     try {
-      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}`);
+      const response = await fetch(
+        `${FLASK_SERVER_URL}/tasks/${currentUserId}`
+      );
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'タスクリストの取得に失敗しました');
+        throw new Error(errorData.error || "タスクリストの取得に失敗しました");
       }
       let fetchedTasks = await response.json();
 
-      // FireStoreと同様のソートロジックを適用
       fetchedTasks.sort((a, b) => {
-          if (a.completed !== b.completed) return a.completed ? 1 : -1;
-          const deadlineA = a.deadline ? new Date(a.deadline).getTime() : Infinity;
-          const deadlineB = b.deadline ? new Date(b.deadline).getTime() : Infinity;
-          if (deadlineA !== deadlineB) return deadlineA - deadlineB;
-          const createdAtA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const createdAtB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return createdAtA - createdAtB;
+        if (a.completed !== b.completed) return a.completed ? 1 : -1;
+        const deadlineA = a.deadline
+          ? new Date(a.deadline).getTime()
+          : Infinity;
+        const deadlineB = b.deadline
+          ? new Date(b.deadline).getTime()
+          : Infinity;
+        if (deadlineA !== deadlineB) return deadlineA - deadlineB;
+        const createdAtA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const createdAtB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return createdAtA - createdAtB;
       });
 
-      setTasks(fetchedTasks.filter(task => !task.hidden)); // hiddenなタスクは非表示
+      setTasks(fetchedTasks.filter((task) => !task.hidden)); // hiddenなタスクは非表示
       setMessage({ text: "課題リストを更新しました。", type: "info" });
     } catch (error) {
       console.error("Error fetching tasks:", error);
-      setMessage({ text: `課題の取得中にエラーが発生しました: ${error.message}`, type: "error" });
+      setMessage({
+        text: `課題の取得中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-      if (currentUserId && googleUserInfo) { // 認証とGoogleログインが完了したら
-          fetchTasks();
-      } else {
-          setTasks([]); // ログアウト時や未認証時はタスクをクリア
-      }
-  }, [currentUserId, googleUserInfo]); // 依存配列にcurrentUserIdとgoogleUserInfoを追加
+    if (currentUserId && googleUserInfo) {
+      fetchTasks();
+    } else {
+      setTasks([]);
+    }
+  }, [currentUserId, googleUserInfo]);
 
   // --- Fetch Unavailable Slots from Flask Backend ---
   const fetchUnavailableSlots = async () => {
     if (!currentUserId || !googleUserInfo) {
-        setUserDefinedUnavailableSlots([]);
-        return;
+      setUserDefinedUnavailableSlots([]);
+      return;
     }
     setIsLoading(true);
     try {
-        const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}`);
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || '固定の予定リストの取得に失敗しました');
-        }
-        const fetchedSlots = await response.json();
-        setUserDefinedUnavailableSlots(fetchedSlots);
+      const response = await fetch(
+        `${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}`
+      );
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || "固定の予定リストの取得に失敗しました"
+        );
+      }
+      const fetchedSlots = await response.json();
+      setUserDefinedUnavailableSlots(fetchedSlots);
     } catch (error) {
-        console.error("Error fetching unavailable slots:", error);
-        setMessage({ text: `固定の予定の取得中にエラーが発生しました: ${error.message}`, type: "error" });
+      console.error("Error fetching unavailable slots:", error);
+      setMessage({
+        text: `固定の予定の取得中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
-      if (currentUserId && googleUserInfo) {
-          fetchUnavailableSlots();
-      } else {
-          setUserDefinedUnavailableSlots([]);
-      }
+    if (currentUserId && googleUserInfo) {
+      fetchUnavailableSlots();
+    } else {
+      setUserDefinedUnavailableSlots([]);
+    }
   }, [currentUserId, googleUserInfo]);
 
   // --- Google Login & Calendar ---
@@ -538,65 +567,6 @@ function MainAppContent() {
     }
   };
 
-  // --- Helper function to generate recurring unavailability slots (no change, but note it's client-side) ---
-  // This client-side function is kept for consistency with how Google Calendar events were handled locally.
-  // However, the Flask backend's prepare_inputs_from_react will also handle unavailable slots from the API.
-  const generateRecurringSlots = (
-    unavailableSlots,
-    searchStartDate,
-    searchEndDate
-  ) => {
-    const generatedSlots = [];
-    const startOfDaySearch = new Date(searchStartDate);
-    startOfDaySearch.setHours(0, 0, 0, 0);
-
-    for (
-      let d = new Date(startOfDaySearch);
-      d.getTime() <= searchEndDate.getTime();
-      d.setDate(d.getDate() + 1)
-    ) {
-      const currentDayOfWeek = d.getDay(); // 0 = Sunday, 1 = Monday, ... 6 = Saturday
-
-      unavailableSlots.forEach((slot) => {
-        const isMatchingDay =
-          Array.isArray(slot.dayOfWeek) &&
-          slot.dayOfWeek.includes(currentDayOfWeek.toString());
-
-        if (isMatchingDay) {
-          let slotStart = new Date(d);
-          slotStart.setHours(
-            parseInt(slot.startTime.split(":")[0]),
-            parseInt(slot.startTime.split(":")[1]),
-            0,
-            0
-          );
-
-          let slotEnd = new Date(d);
-          slotEnd.setHours(
-            parseInt(slot.endTime.split(":")[0]),
-            parseInt(slot.endTime.split(":")[1]),
-            0,
-            0
-          );
-
-          if (slotEnd.getTime() <= slotStart.getTime()) {
-            slotEnd.setDate(slotEnd.getDate() + 1);
-          }
-
-          if (slotEnd > searchStartDate && slotStart < searchEndDate) {
-            generatedSlots.push({
-              start: slotStart,
-              end: slotEnd,
-              summary: slot.label || "固定の予定",
-              isUserDefined: true,
-            });
-          }
-        }
-      });
-    }
-    return generatedSlots;
-  };
-
   // --- Google Calendar Event Management ---
   const addEventToGoogleCalendar = async (
     title,
@@ -622,11 +592,11 @@ function MainAppContent() {
         description: description,
         start: {
           dateTime: startTime.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timeZone: "Asia/Tokyo",
         },
         end: {
           dateTime: endTime.toISOString(),
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timeZone: "Asia/Tokyo",
         },
       };
 
@@ -694,7 +664,10 @@ function MainAppContent() {
         }
       );
 
-      if (!response.ok) {
+      if (response.status !== 204 && response.ok) {
+        // response.ok は status 2xx をチェックするので、204は含まれる
+        // 204 No Content の場合は json() を呼び出すとエラーになるので注意
+        // response.ok が true で status が 204 以外の場合にのみ json() を試みる
         if (response.status !== 204) {
           const errorData = await response.json();
           console.error(
@@ -708,6 +681,7 @@ function MainAppContent() {
           return false;
         }
       }
+      // 204 No Content の場合はそのまま成功とみなす
 
       setMessage({
         text: "Googleカレンダーからイベントを削除しました。",
@@ -726,8 +700,72 @@ function MainAppContent() {
     }
   };
 
+  const handleRejectAndResuggest = async () => {
+    if (!currentUserId || !aiDateSuggestion) return;
+
+    setIsLoading(true);
+    setMessage({
+      text: "フィードバックを学習し、別の時間を探しています...",
+      type: "info",
+    });
+
+    try {
+      const newTaskForLearning = {
+        id: "temp-" + Date.now(),
+        title: newTaskTitle,
+        estimatedTime: parseInt(newTaskEstimate),
+        deadline: newTaskDeadline || null,
+        completed: false,
+        hidden: false,
+      };
+
+      const allUncompletedTasks = [
+        ...tasks.filter((t) => !t.completed),
+        newTaskForLearning,
+      ];
+
+      const existingPlacedTasks = tasks.filter((t) => t.start && !t.completed);
+
+      const rejectResponse = await fetch(
+        `${FLASK_SERVER_URL}/reject-suggestion`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            userId: currentUserId,
+            startTime: aiDateSuggestion.suggestedSlot.start.toISOString(),
+            endTime: aiDateSuggestion.suggestedSlot.end.toISOString(),
+            react_tasks: allUncompletedTasks,
+            unavailableSlots: userDefinedUnavailableSlots,
+            existingTasks: existingPlacedTasks,
+          }),
+        }
+      );
+
+      if (!rejectResponse.ok) {
+        const errorData = await rejectResponse.json();
+        setMessage({
+          text: `フィードバック学習中にエラー: ${errorData.error}`,
+          type: "error",
+        });
+      }
+
+      await requestAiSuggestion();
+    } catch (error) {
+      console.error("Error rejecting and resuggesting:", error);
+      setMessage({
+        text: `再提案中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
+      setIsLoading(false);
+    }
+  };
+
   // --- Task Management ---
-  const requestAiSuggestion = async () => { // searchAfter removed, AI handles from current time
+  // requestAiSuggestion 関数を修正
+  const requestAiSuggestion = async () => {
     if (!googleUserInfo) {
       setMessage({
         text: "AI提案を利用するにはGoogleログインが必要です。",
@@ -736,51 +774,69 @@ function MainAppContent() {
       return;
     }
     if (!newTaskTitle.trim() || !newTaskEstimate.trim()) {
-      setMessage({ text: "課題タイトルと見積もり時間は必須です。", type: "error" });
+      setMessage({
+        text: "課題タイトルと見積もり時間は必須です。",
+        type: "error",
+      });
       return;
     }
 
     setIsLoading(true);
     try {
-        const response = await fetch(`${FLASK_SERVER_URL}/suggest-slot`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                userId: currentUserId,
-                task: {
-                    id: 'temp-' + Date.now(), // 一時的なID
-                    title: newTaskTitle,
-                    estimatedTime: parseInt(newTaskEstimate),
-                    deadline: newTaskDeadline || null, // 期限がない場合も考慮
-                },
-                unavailableSlots: userDefinedUnavailableSlots, // 固定の予定もAIに渡す
-                // Google Calendar イベントもAIに渡す場合はここに追加
-                // googleEvents: googleEvents.map(e => ({ start: e.start, end: e.end, summary: e.summary })),
-            }),
-        });
+      // NGゾーン計算用: すでにカレンダーに配置済みのタスク
+      const existingPlacedTasks = tasks.filter((t) => t.start && !t.completed);
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'AI提案の取得に失敗しました');
-        }
+      // Qテーブル評価用: 未完了かつ未スケジュールのタスク
+      const uncompletedAndUnscheduledTasks = tasks.filter(
+        (t) => !t.completed && !t.start
+      );
 
-        const suggestion = await response.json();
-        setAiDateSuggestion({
+      const response = await fetch(`${FLASK_SERVER_URL}/suggest-slot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: currentUserId,
+          // 提案してほしい新規タスク
+          task: {
+            id: "temp-" + Date.now(),
             title: newTaskTitle,
-            estimatedTime: newTaskEstimate,
-            suggestedSlot: { // バックエンドから返る形式に合わせる
-                start: new Date(suggestion.start),
-                end: new Date(suggestion.end),
-            },
-        });
-        setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
+            estimatedTime: parseInt(newTaskEstimate),
+            deadline: newTaskDeadline || null,
+          },
+          // AIが考慮するべき他の情報
+          unavailableSlots: userDefinedUnavailableSlots,
+          existingTasks: existingPlacedTasks, // NGゾーン用
+          uncompletedTasks: uncompletedAndUnscheduledTasks, // Qテーブル評価用
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "AI提案の取得に失敗しました");
+      }
+
+      const suggestion = await response.json();
+      setAiDateSuggestion({
+        title: newTaskTitle,
+        estimatedTime: newTaskEstimate,
+        suggestedSlot: {
+          start: new Date(suggestion.start),
+          end: new Date(suggestion.end),
+        },
+      });
+      setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
     } catch (error) {
-        console.error("Error requesting AI suggestion:", error);
-        setMessage({ text: `AI提案中にエラーが発生しました: ${error.message}`, type: "error" });
+      console.error("Error requesting AI suggestion:", error);
+      setMessage({
+        text: `AI提案中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
+      // 提案が失敗したら、AI提案の表示をクリアする
+      setAiDateSuggestion(null);
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -802,7 +858,10 @@ function MainAppContent() {
       if (googleAccessToken) {
         const eventDescription = `見積もり時間: ${estimatedTime}分`;
         const addEventResult = await addEventToGoogleCalendar(
-          title, suggestedSlot.start, suggestedSlot.end, eventDescription
+          title,
+          suggestedSlot.start,
+          suggestedSlot.end,
+          eventDescription
         );
         if (addEventResult.success) {
           googleEventId = addEventResult.eventId;
@@ -811,59 +870,58 @@ function MainAppContent() {
         }
       }
 
-      // 新しいタスクをバックエンドAPIを通じて追加
       const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              userId: currentUserId,
-              task: {
-                  title,
-                  estimatedTime: parseInt(estimatedTime),
-                  deadline: finalDeadline,
-                  completed: false,
-                  createdAt: new Date().toISOString(),
-                  completedAt: null,
-                  concentrationLevel: null,
-                  hidden: false,
-                  googleEventId: googleEventId,
-                  rescheduled: false,
-              },
-          }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUserId,
+          task: {
+            title,
+            estimatedTime: parseInt(estimatedTime),
+            deadline: finalDeadline,
+            start: suggestedSlot.start.toISOString(),
+            end: suggestedSlot.end.toISOString(),
+            completed: false,
+            createdAt: new Date().toISOString(),
+            completedAt: null,
+            concentrationLevel: null,
+            hidden: false,
+            googleEventId: googleEventId,
+            rescheduled: false,
+          },
+        }),
       });
 
       if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'タスクの追加に失敗しました');
+        const errorData = await response.json();
+        throw new Error(errorData.error || "タスクの追加に失敗しました");
       }
 
       setMessage({ text: `課題「${title}」を追加しました！`, type: "success" });
 
-      fetchTasks(); // 成功後、タスクリストを更新するために再フェッチ
+      fetchTasks();
 
-      // フォームをリセット
+      // AI提案確定後、入力フィールドをクリアし、AI提案表示をリセットして課題追加画面に戻る
       setNewTaskTitle("");
       setNewTaskEstimate("");
       setNewTaskDeadline("");
       setAiDateSuggestion(null);
-      setEditingTask(null);
-
     } catch (error) {
       console.error("Error confirming and adding task:", error);
-      setMessage({ text: `課題の追加中にエラーが発生しました: ${error.message}`, type: "error" });
+      setMessage({
+        text: `課題の追加中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleTaskSubmit = async () => {
-    // --- Validation for all modes ---
     if (!newTaskTitle.trim()) {
       setMessage({ text: "課題タイトルを入力してください。", type: "error" });
       return;
     }
-
-    // Google login required
     if (!googleUserInfo) {
       setMessage({
         text: "課題を保存するにはGoogleログインが必要です。",
@@ -872,11 +930,12 @@ function MainAppContent() {
       return;
     }
 
-    // AI suggestion mode
-    if (googleAccessToken && newTaskEstimate.trim() && !editingTask) {
+    // AI提案モード
+    // editingTask ステートは存在しないため、常にAI提案モードの条件で判定
+    if (googleAccessToken && newTaskEstimate.trim()) {
       requestAiSuggestion();
     } else {
-      // Manual mode: requires all fields except AI's if AI mode is not active
+      // 手動追加モード（見積もり時間がない場合など）
       if (!newTaskEstimate.trim() || !newTaskDeadline.trim()) {
         setMessage({
           text: "見積もり時間と希望の期限を入力してください。",
@@ -884,7 +943,6 @@ function MainAppContent() {
         });
         return;
       }
-
       if (!currentUserId) {
         setMessage({
           text: "ユーザー情報が取得できません。",
@@ -904,47 +962,32 @@ function MainAppContent() {
           completedAt: null,
           concentrationLevel: null,
           hidden: false,
-          googleEventId: null, // Manually added tasks don't have a Google Event ID initially.
+          googleEventId: null,
         };
 
-        if (editingTask) {
-            const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${editingTask.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(taskData),
-            });
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || '課題の更新に失敗しました');
-            }
-            setMessage({
-                text: `課題「${newTaskTitle}」を更新しました！`,
-                type: "success",
-            });
-        } else {
-            const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userId: currentUserId,
-                    task: taskData,
-                }),
-            });
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || '課題の追加に失敗しました');
-            }
-            setMessage({
-                text: `課題「${newTaskTitle}」を追加しました！`,
-                type: "success",
-            });
+        // 編集機能削除のため、常にPOST
+        const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: currentUserId,
+            task: taskData,
+          }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "課題の追加に失敗しました");
         }
-        
-        fetchTasks(); // リストを更新
+        setMessage({
+          text: `課題「${newTaskTitle}」を追加しました！`,
+          type: "success",
+        });
+
+        fetchTasks();
         setNewTaskTitle("");
         setNewTaskEstimate("");
         setNewTaskDeadline("");
-        setEditingTask(null);
+        // setEditingTask(null); // 編集機能削除のためコメントアウト
       } catch (error) {
         console.error("Error saving task manually:", error);
         setMessage({
@@ -957,81 +1000,130 @@ function MainAppContent() {
     }
   };
 
-  const startEditTask = (task) => {
-    if (!googleUserInfo) {
+  // 編集機能削除のため、startEditTask 関数も削除
+  // const startEditTask = (task) => { ... };
+
+  // 新しく追加: 期限切れタスクをスキップする関数
+  const handleSkipTask = async (taskId) => {
+    if (!googleUserInfo || !currentUserId) return;
+
+    const taskToSkip = tasks.find((task) => task.id === taskId);
+    if (!taskToSkip) return;
+
+    setIsLoading(true);
+    try {
+      // 期限切れで、かつスケジュールされたタスクのみ、AIに負のフィードバックを送信
+      // スケジュールされていないタスクのスキップはAI学習に影響させない
+      if (taskToSkip.start && taskToSkip.end) {
+        const skipResponse = await fetch(`${FLASK_SERVER_URL}/skip-feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: currentUserId,
+            taskId: taskId, // AI側での参照用
+            startTime: taskToSkip.start,
+            endTime: taskToSkip.end,
+          }),
+        });
+
+        if (!skipResponse.ok) {
+          const errorData = await skipResponse.json();
+          setMessage({
+            text: `スキップフィードバックの送信中にエラー: ${errorData.error}`,
+            type: "error",
+          });
+        } else {
+          setMessage({
+            text: "課題をスキップしました（AIが学習します）。",
+            type: "info",
+          });
+        }
+      } else {
+        setMessage({ text: "課題をスキップしました。", type: "info" });
+      }
+
+      // 課題の状態を更新して非表示にする
+      const updateTaskResponse = await fetch(
+        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            completed: true, // 完了済みとしてマーク
+            completedAt: new Date().toISOString(), // 現在時刻を完了時刻とする
+            concentrationLevel: 0, // スキップなので集中度は0（またはnull）
+            hidden: true, // リストから非表示
+            rescheduled: false, // 再入力フラグをリセット
+            // googleEventIdはそのまま
+          }),
+        }
+      );
+      if (!updateTaskResponse.ok) {
+        const errorData = await updateTaskResponse.json();
+        throw new Error(errorData.error || "タスク状態の更新に失敗");
+      }
+
+      // Googleカレンダーイベントがあれば削除（AIが登録したイベントなので）
+      if (taskToSkip.googleEventId) {
+        await deleteEventFromGoogleCalendar(taskToSkip.googleEventId);
+      }
+
+      fetchTasks(); // リストを再取得してUIを更新
+    } catch (error) {
+      console.error("Error skipping task:", error);
       setMessage({
-        text: "課題を編集するにはGoogleログインが必要です。",
+        text: `課題のスキップ中にエラーが発生しました: ${error.message}`,
         type: "error",
       });
-      return;
+    } finally {
+      setIsLoading(false);
     }
-    setEditingTask(task);
-    setNewTaskTitle(task.title);
-    setNewTaskEstimate(task.estimatedTime?.toString() || "");
-    setNewTaskDeadline(task.deadline || "");
-    setShowTaskInput(true);
-    if (taskInputRef.current) taskInputRef.current.focus();
   };
 
   const toggleTaskCompletion = async (taskId, currentStatus) => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "課題の完了状態を更新するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
+    if (!googleUserInfo || !currentUserId) return;
 
     const taskToUpdate = tasks.find((task) => task.id === taskId);
-    if (!taskToUpdate) {
-      console.error("Task not found for toggling completion:", taskId);
-      return;
-    }
+    if (!taskToUpdate) return;
 
-    // If changing from uncompleted to completed
     if (!currentStatus) {
-      const now = new Date();
-      now.setHours(0, 0, 0, 0);
-
-      const deadlineDate = taskToUpdate.deadline
-        ? new Date(taskToUpdate.deadline)
-        : null;
-      if (deadlineDate) {
-        deadlineDate.setHours(0, 0, 0, 0);
-      }
-
-      if (deadlineDate && deadlineDate >= now) {
-        setShowCompletionFeedbackModalForTask(taskToUpdate);
-        return;
-      } else if (taskToUpdate.googleEventId) {
-        await deleteEventFromGoogleCalendar(taskToUpdate.googleEventId);
-      }
+      // 未完了 -> 完了にする場合はフィードバックモーダルを表示
+      setShowCompletionFeedbackModalForTask(taskToUpdate);
     } else {
+      // 完了状態 -> 未完了に戻す場合
       setIsLoading(true);
       try {
-        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+        // Google Event IDがあれば削除を試みる (期限内のタスクのみ)
+        // 期限切れタスクは元々Google Calendarに登録されない想定なので、削除処理は不要だが、
+        // 念のためtaskToUpdate.googleEventIdの存在とtaskToUpdate.startで確認
+        if (taskToUpdate.googleEventId && taskToUpdate.start) {
+          // 期限内のタスクのみGoogleカレンダーから削除
+          await deleteEventFromGoogleCalendar(taskToUpdate.googleEventId);
+        }
+        const response = await fetch(
+          `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                completed: false,
-                completedAt: null,
-                concentrationLevel: null,
-                hidden: false,
-                googleEventId: null, // Clear the Google event ID when reverting to uncompleted
+              completed: false,
+              completedAt: null,
+              concentrationLevel: null,
+              hidden: false, // 未完了に戻したら再表示
+              googleEventId:
+                taskToUpdate.start && taskToUpdate.googleEventId
+                  ? taskToUpdate.googleEventId
+                  : null, // 期限内のタスクでGoogle Event IDがあれば維持、そうでなければnull
+              rescheduled: false,
             }),
-        });
+          }
+        );
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
+          const errorData = await response.json();
+          throw new Error(errorData.error || "タスク状態の更新に失敗しました");
         }
         setMessage({ text: "課題を未完了に戻しました。", type: "info" });
+        fetchTasks();
       } catch (error) {
         console.error("Error reverting task completion:", error);
         setMessage({
@@ -1041,37 +1133,6 @@ function MainAppContent() {
       } finally {
         setIsLoading(false);
       }
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                completed: true,
-                completedAt: new Date().toISOString(),
-                // concentrationLevel remains null here, set by modal
-                // hidden remains false here, set by modal
-            }),
-        });
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
-        }
-        setMessage({
-            text: "課題を完了しました！お疲れ様でした。",
-            type: "success",
-        });
-    } catch (error) {
-      console.error("Error toggling task completion:", error);
-      setMessage({
-        text: "課題の完了状態の切り替え中にエラーが発生しました。",
-        type: "error",
-      });
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -1081,10 +1142,6 @@ function MainAppContent() {
     completionTime
   ) => {
     if (!googleUserInfo || !currentUserId) {
-      setMessage({
-        text: "課題の完了情報を保存するにはGoogleログインが必要です。",
-        type: "error",
-      });
       setShowCompletionFeedbackModalForTask(null);
       return;
     }
@@ -1092,214 +1149,130 @@ function MainAppContent() {
     setIsLoading(true);
     try {
       const taskToComplete = tasks.find((task) => task.id === taskId);
+      if (!taskToComplete) {
+        throw new Error("完了対象のタスクが見つかりませんでした。");
+      }
 
-      // フィードバックをバックエンドAPIに送信
-      const feedbackResponse = await fetch(`${FLASK_SERVER_URL}/feedback`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+      // 期限切れのタスクかどうかを判定
+      const isOverdue =
+        taskToComplete.end && new Date() > new Date(taskToComplete.end);
+
+      // AI学習フィードバック送信の条件
+      // 期限内のスケジュール済みタスクの場合のみAI学習フィードバックを送信
+      if (!isOverdue && taskToComplete.start && taskToComplete.end) {
+        const tasksForLearning = tasks.map((task) =>
+          task.id === taskId ? { ...task, completed: true, hidden: true } : task
+        );
+
+        const existingPlacedTasks = tasks.filter(
+          (t) => t.id !== taskId && t.start && !t.completed
+        );
+
+        const feedbackResponse = await fetch(`${FLASK_SERVER_URL}/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-              userId: currentUserId,
-              completionTime: completionTime.toISOString(),
-              concentrationRating: concentration,
+            userId: currentUserId,
+            startTime: taskToComplete.start,
+            endTime: taskToComplete.end,
+            concentrationRating: concentration,
+            react_tasks: tasksForLearning,
+            unavailableSlots: userDefinedUnavailableSlots,
+            existingTasks: existingPlacedTasks,
           }),
-      });
+        });
 
-      if (!feedbackResponse.ok) {
+        if (!feedbackResponse.ok) {
           const errorData = await feedbackResponse.json();
-          throw new Error(errorData.error || 'フィードバックの送信に失敗しました');
-      }
-
-      // タスクの完了ステータスをバックエンドAPIを通じて更新
-      const updateTaskResponse = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              completed: true,
-              completedAt: completionTime.toISOString(),
-              concentrationLevel: concentration,
-              hidden: true, // Hide from list after completion
-          }),
-      });
-
-      if (!updateTaskResponse.ok) {
-          const errorData = await updateTaskResponse.json();
-          throw new Error(errorData.error || 'タスク状態の更新に失敗しました');
-      }
-
-      if (taskToComplete && taskToComplete.googleEventId) {
-        await deleteEventFromGoogleCalendar(taskToComplete.googleEventId);
-        // Google Event IDをAPIを通じてクリア
-        await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ googleEventId: null }),
+          setMessage({
+            text: `AIの学習中にエラー: ${errorData.error}`,
+            type: "error",
+          });
+        } else {
+          setMessage({
+            text: "素晴らしい！フィードバックをAIが学習します。",
+            type: "success",
+          });
+        }
+      } else {
+        // 期限切れまたはスケジュールされていないタスクの場合は学習をスキップ
+        setMessage({
+          text: isOverdue
+            ? "期限切れ課題を完了しました。"
+            : "課題を完了しました（学習はスキップされました）。",
+          type: "info", // 期限切れの場合は情報、学習スキップの場合は情報
         });
       }
 
-      setMessage({
-        text: "素晴らしい！集中して課題を終えましたね！報酬獲得！",
-        type: "success",
-      });
-      fetchTasks(); // リストを更新
+      // タスクの完了状態を更新
+      const updateTaskResponse = await fetch(
+        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            completed: true,
+            completedAt: completionTime.toISOString(),
+            concentrationLevel: concentration,
+            hidden: true, // 完了したら非表示
+          }),
+        }
+      );
+      if (!updateTaskResponse.ok) {
+        const errorData = await updateTaskResponse.json();
+        throw new Error(errorData.error || "タスク状態の更新に失敗");
+      }
+
+      // Googleカレンダーイベントがあれば削除 (期限内のタスクのみ)
+      if (taskToComplete.googleEventId && !isOverdue) {
+        await deleteEventFromGoogleCalendar(taskToComplete.googleEventId);
+      }
+
+      fetchTasks();
     } catch (error) {
       console.error("Error saving concentrated completion:", error);
       setMessage({
-        text: "課題の完了情報の保存に失敗しました。",
+        text: `課題の完了情報の保存に失敗しました: ${error.message}`,
         type: "error",
       });
     } finally {
       setIsLoading(false);
-      setShowCompletionFeedbackModalForTask(null); // Close modal
+      setShowCompletionFeedbackModalForTask(null);
     }
   };
 
   const deleteTask = async (taskId) => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "課題を削除するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
+    if (!googleUserInfo || !currentUserId) return;
     setIsLoading(true);
     try {
       const taskToDelete = tasks.find((task) => task.id === taskId);
-
-      if (taskToDelete && taskToDelete.googleEventId) {
+      // Googleカレンダーイベントがあれば削除 (期限内のタスクのみ)
+      const isOverdue =
+        taskToDelete.end && new Date() > new Date(taskToDelete.end);
+      if (taskToDelete && taskToDelete.googleEventId && !isOverdue) {
+        // 期限内のタスクのみGoogleカレンダーから削除
         await deleteEventFromGoogleCalendar(taskToDelete.googleEventId);
       }
-
-      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-          method: 'DELETE',
-      });
-
+      const response = await fetch(
+        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
+        { method: "DELETE" }
+      );
       if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'タスクの削除に失敗しました');
+        const errorData = await response.json();
+        throw new Error(errorData.error || "タスクの削除に失敗");
       }
       setMessage({ text: "課題を削除しました。", type: "info" });
-      fetchTasks(); // リストを更新
+      fetchTasks();
     } catch (error) {
-      console.error("Error deleting task:", error);
-      setMessage({
-        text: "課題の削除中にエラーが発生しました。",
-        type: "error",
-      });
+      console.error("Error deleting task:", error); // エラーログを追加
+      setMessage({ text: "課題の削除中にエラー。", type: "error" });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const saveConcentration = async (taskId, rating) => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "集中度を記録するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
-    if (rating == null || rating < 1 || rating > 5) {
-      setMessage({
-        text: "集中度は1から5の間で入力してください。",
-        type: "error",
-      });
-      return;
-    }
-    setIsLoading(true);
-    try {
-        const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ concentrationLevel: rating, hidden: true }),
-        });
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || '集中度の保存に失敗しました');
-        }
-        setMessage({
-            text: "集中度を記録しました！お疲れ様でした。",
-            type: "success",
-        });
-        fetchTasks(); // リストを更新
-    } catch (error) {
-      console.error("Error saving concentration:", error);
-      setMessage({ text: "集中度の保存に失敗しました。", type: "error" });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const rescheduleTask = async (taskId) => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "課題を再入力するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
-    const additionalTime = rescheduleInputs[taskId];
-    if (!additionalTime || additionalTime <= 0) {
-      setMessage({
-        text: "追加でかかる時間を分単位で入力してください。",
-        type: "error",
-      });
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const taskToReschedule = tasks.find((task) => task.id === taskId);
-
-      if (taskToReschedule && taskToReschedule.googleEventId) {
-        await deleteEventFromGoogleCalendar(taskToReschedule.googleEventId);
-      }
-
-      const response = await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              estimatedTime: parseInt(additionalTime), // Overwrite existing estimated time
-              deadline: null, // Reset deadline
-              completed: false,
-              rescheduled: true, // Reschedule flag
-              googleEventId: null, // Clear Google Event ID after deletion
-          }),
-      });
-
-      if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || '課題の再入力に失敗しました');
-      }
-      setMessage({ text: "課題を再入力しました。", type: "success" });
-      setRescheduleInputs((prev) => ({ ...prev, [taskId]: "" })); // Clear input field
-      fetchTasks(); // リストを更新
-    } catch (error) {
-      console.error("Error rescheduling task:", error);
-      setMessage({ text: "課題の再入力に失敗しました。", type: "error" });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // rescheduleTask 関数は削除しました。
+  // const rescheduleTask = async (taskId) => { ... };
 
   // --- Unavailable Slots Management ---
   const handleDayChange = (e) => {
@@ -1320,58 +1293,19 @@ function MainAppContent() {
   };
 
   const handleAddUnavailableSlot = async () => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "固定の予定を保存するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
+    if (!googleUserInfo || !currentUserId) return;
     if (selectedUnavailableDays.length === 0) {
-      setMessage({
-        text: "曜日を少なくとも1つ選択してください。",
-        type: "error",
-      });
+      setMessage({ text: "曜日を1つ以上選択。", type: "error" });
       return;
     }
     if (!newUnavailableStartTime || !newUnavailableEndTime) {
-      setMessage({
-        text: "開始時間と終了時間を入力してください。",
-        type: "error",
-      });
+      setMessage({ text: "開始・終了時間を入力。", type: "error" });
       return;
     }
-    if (newUnavailableStartTime === newUnavailableEndTime) {
-      setMessage({
-        text: "開始時間と終了時間は同じにできません。",
-        type: "error",
-      });
+    if (newUnavailableStartTime >= newUnavailableEndTime) {
+      setMessage({ text: "開始時間は終了時間より前に。", type: "error" });
       return;
     }
-
-    const [startHour, startMinute] = newUnavailableStartTime
-      .split(":")
-      .map(Number);
-    const [endHour, endMinute] = newUnavailableEndTime.split(":").map(Number);
-
-    if (
-      startHour * 60 + startMinute > endHour * 60 + endMinute &&
-      !(endHour < startHour)
-    ) {
-      setMessage({
-        text: "開始時間は終了時間より前にしてください。(日をまたぐ設定は可能です)",
-        type: "error",
-      });
-      return;
-    }
-
     setIsLoading(true);
     try {
       const slotData = {
@@ -1382,70 +1316,55 @@ function MainAppContent() {
           newUnavailableLabel.trim() ||
           `毎週 ${selectedUnavailableDays
             .map((d) => DAY_OF_WEEK_MAP[parseInt(d)])
-            .join(", ")} の固定予定`,
+            .join(", ")}`,
         createdAt: new Date().toISOString(),
       };
       const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: currentUserId, slot: slotData }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUserId, slot: slotData }),
       });
       if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || '固定の予定の追加に失敗しました');
+        // エラーレスポンスも考慮
+        const errorData = await response.json();
+        throw new Error(errorData.error || "固定予定の追加に失敗");
       }
-      setMessage({
-        text: `固定の予定「${slotData.label}」を追加しました！`,
-        type: "success",
-      });
-      fetchUnavailableSlots(); // リストを更新
+      setMessage({ text: `固定の予定を追加しました！`, type: "success" });
+      fetchUnavailableSlots();
       setSelectedUnavailableDays([]);
-      setNewUnavailableStartTime("09:00");
-      setNewUnavailableEndTime("17:00");
       setNewUnavailableLabel("");
     } catch (error) {
-      console.error("Error adding unavailable slot:", error);
+      console.error("Error adding unavailable slot:", error); // エラーログを追加
       setMessage({
-        text: `固定の予定の追加中にエラーが発生しました: ${error.message}`,
+        text: `固定予定の追加に失敗: ${error.message}`,
         type: "error",
-      });
+      }); // 詳細なエラーメッセージ
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDeleteUnavailableSlot = async (slotId) => {
-    if (!googleUserInfo) {
-      setMessage({
-        text: "固定の予定を削除するにはGoogleログインが必要です。",
-        type: "error",
-      });
-      return;
-    }
-    if (!currentUserId) {
-      setMessage({
-        text: "ユーザー情報が取得できません。",
-        type: "error",
-      });
-      return;
-    }
+    if (!googleUserInfo || !currentUserId) return;
     setIsLoading(true);
     try {
-      const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}/${slotId}`, {
-          method: 'DELETE',
-      });
+      const response = await fetch(
+        `${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}/${slotId}`,
+        { method: "DELETE" }
+      );
       if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || '固定の予定の削除に失敗しました');
+        // エラーレスポンスも考慮
+        const errorData = await response.json();
+        throw new Error(errorData.error || "固定予定の削除に失敗");
       }
       setMessage({ text: "固定の予定を削除しました。", type: "info" });
-      fetchUnavailableSlots(); // リストを更新
+      fetchUnavailableSlots();
     } catch (error) {
-      console.error("Error deleting unavailable slot:", error);
+      console.error("Error deleting unavailable slot:", error); // エラーログを追加
       setMessage({
-        text: "固定の予定の削除中にエラーが発生しました。",
+        text: `固定予定の削除に失敗: ${error.message}`,
         type: "error",
-      });
+      }); // 詳細なエラーメッセージ
     } finally {
       setIsLoading(false);
     }
@@ -1454,25 +1373,21 @@ function MainAppContent() {
   // --- UI Rendering ---
   const getTaskCardBgColor = (task) => {
     if (task.completed) return "bg-green-100 border-green-500";
-    if (task.deadline) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const deadlineDate = new Date(task.deadline);
-      deadlineDate.setHours(0, 0, 0, 0);
-      const tomorrow = new Date();
-      tomorrow.setDate(today.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      const threeDaysFromNow = new Date();
-      threeDaysFromNow.setDate(today.getDate() + 3);
-      threeDaysFromNow.setHours(0, 0, 0, 0);
-      if (deadlineDate < today)
-        return "bg-red-100 border-red-500 animate-pulse-fast"; // Expired
-      if (deadlineDate <= tomorrow) return "bg-red-100 border-red-500"; // Deadline by tomorrow
-      if (deadlineDate <= threeDaysFromNow)
-        return "bg-yellow-100 border-yellow-500"; // Deadline within 3 days
+    const now = new Date();
+    // 期限切れで未完了のタスクは灰色
+    if (task.end && now > new Date(task.end) && !task.completed) {
+      return "bg-gray-200 border-gray-400";
     }
-    if (task.rescheduled) return "bg-blue-100 border-blue-500"; // Rescheduled task
-    return "bg-indigo-50 border-indigo-300"; // Default
+    // rescheduled のタスクに関する色分けは維持 (再入力項目はUIから削除されてもフラグは残るため)
+    if (task.rescheduled && !task.start) {
+      return "bg-blue-100 border-blue-500 animate-pulse";
+    }
+    if (task.start) {
+      const diffHours = (new Date(task.start) - now) / 36e5;
+      if (diffHours < 24) return "bg-red-100 border-red-500";
+      if (diffHours < 72) return "bg-yellow-100 border-yellow-500";
+    }
+    return "bg-indigo-50 border-indigo-300";
   };
 
   const visibleTasks = googleUserInfo
@@ -1513,12 +1428,6 @@ function MainAppContent() {
           <p className="text-md sm:text-lg text-gray-600">
             AIがあなたの学習計画を自動で最適化します
           </p>
-          {currentUserId && (
-            <p className="text-xs text-gray-400 mt-1">
-              ユーザーID: {currentUserId}
-            </p>
-          )}{" "}
-          {/* Display full user ID */}
           {message.text && (
             <div
               className={`mt-3 p-3 rounded-md text-sm shadow ${
@@ -1549,20 +1458,14 @@ function MainAppContent() {
               Googleカレンダー連携で自動スケジューリング
             </button>
             <p className="text-xs text-gray-500 mt-2">
-              Googleカレンダーと連携すると、AIが空き時間を見つけて課題の期限を提案します。課題や固定の予定はGoogleログインした場合のみ保存されます。
+              Googleカレンダーと連携すると、AIが空き時間を見つけて課題を提案します。
             </p>
           </section>
         )}
 
         <CollapsibleSection
-          title={editingTask ? "課題を編集" : "新しい課題を追加"}
-          icon={
-            editingTask ? (
-              <Edit3 className="h-6 w-6 text-orange-500" />
-            ) : (
-              <Plus className="h-6 w-6 text-indigo-500" />
-            )
-          }
+          title={"新しい課題を追加"} // 編集機能削除のためタイトルを固定
+          icon={<Plus className="h-6 w-6 text-indigo-500" />} // 編集機能削除のためアイコンを固定
           isOpen={showTaskInput}
           setIsOpen={setShowTaskInput}
         >
@@ -1607,7 +1510,7 @@ function MainAppContent() {
                   htmlFor="taskDeadline"
                   className="block text-sm font-medium text-gray-700 mb-0.5"
                 >
-                  希望の期限 <span className="text-red-500">*</span>
+                  希望の期限
                 </label>
                 <input
                   type="date"
@@ -1619,9 +1522,6 @@ function MainAppContent() {
                 />
               </div>
             </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Google連携時、AIがカレンダーの空き時間から最適な期限を自動で提案します。
-            </p>
           </div>
 
           {aiDateSuggestion ? (
@@ -1631,11 +1531,12 @@ function MainAppContent() {
                 <span className="font-bold">
                   {new Date(
                     aiDateSuggestion.suggestedSlot.start
-                  ).toLocaleDateString("ja-JP", {
+                  ).toLocaleString("ja-JP", {
                     month: "long",
                     day: "numeric",
                     hour: "2-digit",
                     minute: "2-digit",
+                    timeZone: "Asia/Tokyo",
                   })}
                 </span>{" "}
                 でいかがですか？
@@ -1648,10 +1549,10 @@ function MainAppContent() {
                   <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
                 </button>
                 <button
-                  onClick={requestAiSuggestion} // Call AI again for another suggestion
+                  onClick={handleRejectAndResuggest}
                   className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
                 >
-                  <RefreshCw className="h-4 w-4 mr-1.5" /> もう一度
+                  <RefreshCw className="h-4 w-4 mr-1.5" /> 別の時間を探す
                 </button>
                 <button
                   onClick={() => setAiDateSuggestion(null)}
@@ -1668,27 +1569,14 @@ function MainAppContent() {
                 disabled={isLoading}
                 className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50"
               >
-                <Sparkles className="mr-2 h-5 w-5" />{" "}
-                {editingTask ? "課題を更新" : "AIが日時を入れて課題追加"}
+                <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加{" "}
+                {/* 編集テキストを削除 */}
               </button>
-              {editingTask && (
-                <button
-                  onClick={() => {
-                    setEditingTask(null);
-                    setNewTaskTitle("");
-                    setNewTaskEstimate("");
-                    setNewTaskDeadline("");
-                  }}
-                  className="sm:flex-none flex items-center justify-center px-5 py-2.5 bg-gray-200 text-gray-700 rounded-full shadow-md hover:bg-gray-300 transition"
-                >
-                  <RotateCcw className="mr-2 h-5 w-5" /> キャンセル
-                </button>
-              )}
+              {/* 編集キャンセルボタンを削除 */}
             </div>
           )}
         </CollapsibleSection>
 
-        {/* New Section: Fixed Unavailability */}
         <CollapsibleSection
           title="固定の予定を追加・管理"
           icon={<Clock9 className="h-6 w-6 text-purple-500" />}
@@ -1842,134 +1730,121 @@ function MainAppContent() {
             )
           ) : (
             <ul className="space-y-3">
-              {visibleTasks.map((task) => (
-                <li
-                  key={task.id}
-                  className={`p-3 rounded-lg shadow-sm border-l-4 transition-all ${getTaskCardBgColor(
-                    task
-                  )}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <h3
-                        className={`text-md font-semibold truncate ${
-                          task.completed
-                            ? "line-through text-gray-500"
-                            : "text-gray-800"
-                        }`}
-                      >
-                        {task.title}
-                      </h3>
-                      <div className="flex flex-wrap items-center text-xs text-gray-600 mt-0.5 gap-x-2">
-                        {task.estimatedTime > 0 && !task.completed && (
-                          <span className="flex items-center">
-                            <Clock className="h-3.5 w-3.5 mr-0.5" />{" "}
-                            {task.estimatedTime} 分
-                          </span>
-                        )}
-                        {task.deadline && !task.completed && (
-                          <span
-                            className={`flex items-center font-semibold ${
-                              getTaskCardBgColor(task).includes("red")
-                                ? "text-red-700"
-                                : getTaskCardBgColor(task).includes("yellow")
-                                ? "text-yellow-700"
-                                : ""
-                            }`}
-                          >
-                            <Calendar className="h-3.5 w-3.5 mr-0.5" /> 期限:{" "}
-                            {new Date(task.deadline).toLocaleDateString(
-                              "ja-JP"
-                            )}
-                          </span>
-                        )}
-                        {task.rescheduled && (
-                          <span className="text-blue-600 font-semibold">
-                            再入力済
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-1.5 ml-2">
-                      <button
-                        onClick={() =>
-                          toggleTaskCompletion(task.id, task.completed)
-                        }
-                        className={`p-1.5 rounded-full transition shadow-sm ${
-                          task.completed
-                            ? "bg-green-500 hover:bg-green-600"
-                            : "bg-indigo-500 hover:bg-indigo-600"
-                        } text-white`}
-                        title={task.completed ? "未完了に戻す" : "完了にする"}
-                      >
-                        <Check className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => startEditTask(task)}
-                        className="p-1.5 rounded-full bg-yellow-400 hover:bg-yellow-500 text-white shadow-sm transition"
-                        title="編集"
-                      >
-                        <Edit3 className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => deleteTask(task.id)}
-                        className="p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
-                        title="削除"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
+              {visibleTasks.map((task) => {
+                // 期限切れかどうかを判定 (現在時刻を考慮)
+                const now = new Date();
+                const isOverdue =
+                  task.end && now > new Date(task.end) && !task.completed;
 
-                  {task.completed && task.concentrationLevel === null && (
-                    <div className="mt-3 pt-3 border-t border-green-200">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-gray-700">
-                          集中度:
-                        </span>
-                        <StarRating
-                          rating={task.concentrationLevel || 0}
-                          setRating={(rating) =>
-                            saveConcentration(task.id, rating)
-                          }
-                          readOnly={task.concentrationLevel !== null}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {task.deadline &&
-                    new Date(task.deadline) < new Date() &&
-                    !task.completed && (
-                      <div className="mt-3 pt-3 border-t border-red-200">
-                        <p className="text-sm font-semibold text-red-700 mb-1">
-                          この課題は期限切れです
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Repeat className="h-5 w-5 text-gray-500" />
-                          <input
-                            type="number"
-                            placeholder="あと何分かかる？"
-                            className="w-full text-sm p-1 border border-gray-300 rounded-md"
-                            value={rescheduleInputs[task.id] || ""}
-                            onChange={(e) =>
-                              setRescheduleInputs({
-                                ...rescheduleInputs,
-                                [task.id]: e.target.value,
-                              })
-                            }
-                          />
-                          <button
-                            onClick={() => rescheduleTask(task.id)}
-                            className="px-3 py-1 bg-blue-600 text-white text-xs font-semibold rounded-md hover:bg-blue-700"
-                          >
-                            再入力
-                          </button>
+                return (
+                  <li
+                    key={task.id}
+                    className={`p-3 rounded-lg shadow-sm border-l-4 transition-all ${getTaskCardBgColor(
+                      task
+                    )}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 min-w-0">
+                        <h3
+                          className={`text-md font-semibold truncate ${
+                            task.completed
+                              ? "line-through text-gray-500"
+                              : "text-gray-800"
+                          }`}
+                        >
+                          {task.title}
+                          {isOverdue && (
+                            <span className="ml-2 text-red-600">
+                              (期限切れ)
+                            </span>
+                          )}{" "}
+                          {/* 期限切れ表示を追加 */}
+                        </h3>
+                        <div className="flex flex-wrap items-center text-xs text-gray-600 mt-0.5 gap-x-2">
+                          {task.estimatedTime > 0 && !task.completed && (
+                            <span className="flex items-center">
+                              <Clock className="h-3.5 w-3.5 mr-0.5" />{" "}
+                              {task.estimatedTime} 分
+                            </span>
+                          )}
+                          {task.start && !task.completed && (
+                            <span className={`flex items-center font-semibold`}>
+                              <Calendar className="h-3.5 w-3.5 mr-0.5" />{" "}
+                              提案日時: {/* テキストを変更 */}
+                              {new Date(task.start).toLocaleString("ja-JP", {
+                                month: "long",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                timeZone: "Asia/Tokyo",
+                              })}
+                            </span>
+                          )}
+                          {/* 期限切れタスクの「期限切れ」表示は上記のh3タグ内に移動し、再入力項目は削除 */}
+                          {task.rescheduled && !task.start && (
+                            <span className="text-blue-600 font-semibold">
+                              再入力待ち
+                            </span>
+                          )}
                         </div>
                       </div>
-                    )}
-                </li>
-              ))}
+                      <div className="flex items-center space-x-1.5 ml-2">
+                        {!task.completed ? ( // 未完了の場合のみボタンを表示
+                          <>
+                            {isOverdue && task.start ? ( // 期限切れかつスケジュールされたタスクの場合のみスキップボタン
+                              <button
+                                onClick={() => handleSkipTask(task.id)}
+                                className="p-1.5 rounded-full bg-gray-500 hover:bg-gray-600 text-white shadow-sm transition"
+                                title="スキップ"
+                              >
+                                <Rewind className="h-4 w-4" />
+                              </button>
+                            ) : null}
+                            <button
+                              onClick={() =>
+                                toggleTaskCompletion(task.id, task.completed)
+                              }
+                              className={`p-1.5 rounded-full transition shadow-sm ${
+                                isOverdue
+                                  ? "bg-purple-500 hover:bg-purple-600"
+                                  : "bg-green-500 hover:bg-green-600" // 期限切れは紫色、期限内は緑色
+                              } text-white`}
+                              title={
+                                isOverdue
+                                  ? "完了にする (期限切れ)"
+                                  : "完了にする"
+                              }
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : (
+                          // 完了済みの場合は未完了に戻すボタンのみ
+                          <button
+                            onClick={() =>
+                              toggleTaskCompletion(task.id, task.completed)
+                            }
+                            className="p-1.5 rounded-full bg-gray-400 hover:bg-gray-500 text-white shadow-sm transition"
+                            title="未完了に戻す"
+                          >
+                            <Check className="h-4 w-4" />
+                          </button>
+                        )}
+                        {/* 編集ボタンは削除 */}
+                        <button
+                          onClick={() => deleteTask(task.id)}
+                          className="p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
+                          title="削除"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 期限切れの再入力項目は完全に削除 */}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CollapsibleSection>
@@ -2025,7 +1900,6 @@ function MainAppContent() {
         </footer>
       </div>
 
-      {/* Rendering of the concentration feedback modal */}
       {showCompletionFeedbackModalForTask && (
         <CompletionFeedbackModal
           task={showCompletionFeedbackModalForTask}
@@ -2036,11 +1910,7 @@ function MainAppContent() {
       )}
 
       <style>{`
-        @keyframes fade-in-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade-in-down { animation: fade-in-down 0.4s ease-out forwards; }
-        @keyframes pulse-fast { 0%, 100% { opacity: 1; } 50% { opacity: .7; } }\
-        .animate-pulse-fast { animation: pulse-fast 1s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
-      `}</style>
+        @keyframes fade-in-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }\n        .animate-fade-in-down { animation: fade-in-down 0.4s ease-out forwards; }\n        @keyframes pulse { 50% { opacity: .7; } }\n        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }\n      `}</style>
     </div>
   );
 }
@@ -2070,6 +1940,5 @@ const CollapsibleSection = ({ title, icon, children, isOpen, setIsOpen }) => (
 );
 
 export default function App() {
-  // GOOGLE_CLIENT_ID check is done inside MainAppContent, so it's removed from here.
   return <MainAppContent />;
 }

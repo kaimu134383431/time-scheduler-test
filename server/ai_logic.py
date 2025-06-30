@@ -1,13 +1,12 @@
-# このファイルは、これまでの app.py の内容をベースに、
-# サーバーから呼び出されるライブラリとして機能するように整理したものです。
-# 以前の main() 関数はシミュレーション用のため、ここでは削除されています。
-
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 from collections import defaultdict
 import json
+
+# JST (日本標準時) タイムゾーンオブジェクトを定義
+JST = timezone(timedelta(hours=+9))
 
 # --- 1. 設定項目 ---
 ALPHA = 0.1
@@ -15,352 +14,482 @@ GAMMA = 0.9
 EPSILON_START = 1.0
 EPSILON_DECAY = 0.999
 EPSILON_MIN = 0.05
-NUM_BACKGROUND_EPISODES = 200 # バックグラウンド学習用
+NUM_BACKGROUND_EPISODES = 200
 DAYS_IN_WEEK = 7
 SLOTS_PER_DAY = 48
 TOTAL_SLOTS = DAYS_IN_WEEK * SLOTS_PER_DAY
+TOTAL_SLOTS_CONSIDERED_FOR_NG = TOTAL_SLOTS * 2 # 提案検索範囲を2週間に
 RESCHEDULE_REWARD_BONUS = 25.0
 SKIP_PENALTY = -10.0
+REJECTION_PENALTY = -2.0
+Q_VALUE_WEIGHT = 1.0
+CONCENTRATION_WEIGHT = 0.8
 
 # --- 2. AIモデル管理クラス ---
 class AIModel:
     """ユーザーの学習モデル（集中度マップとQテーブル）を管理するクラス"""
     def __init__(self, model_data=None):
-        # model_data は server.py から JSON として渡されるか、None となる
         if model_data and "concentration_map" in model_data:
             self.concentration_map = np.array(model_data['concentration_map'])
-            # JSONのキーは文字列なので、Qテーブルを復元する際にキーを整数に変換
-            self.q_table = defaultdict(lambda: np.zeros(model_data.get('num_actions', 0)), 
-                                       {int(k): np.array(v) for k, v in model_data.get('q_table', {}).items()})
+            q_table_from_json = {int(k): np.array(v) for k, v in model_data.get('q_table', {}).items()}
             self.num_actions = model_data.get('num_actions', 0)
+            self.q_table = defaultdict(lambda: np.zeros(self.num_actions), q_table_from_json)
         else:
-            # 新規ユーザーの場合：モデルを新規作成
             self._initialize_new_model()
 
     def _initialize_new_model(self):
         """新規ユーザー用のモデルを初期値で作成"""
-        self.concentration_map = np.ones(TOTAL_SLOTS) * 2.5  # 全て平均値
-        self.num_actions = 0 # あとでタスク数に応じて設定（`set_num_actions`で設定される）
-        self.q_table = defaultdict(lambda: np.zeros(0)) # 初期状態では行動数が0の配列を返す
+        self.concentration_map = np.ones(TOTAL_SLOTS) * 2.5
+        self.num_actions = 0
+        self.q_table = defaultdict(lambda: np.zeros(0))
 
     def set_num_actions(self, num_actions):
-        """タスク数に応じてQテーブルのaction数を確定させる"""
-        # num_actions が変更された場合のみQテーブルを再初期化
+        """タスク数に応じてQテーブルのaction数を確定させ、既存の学習内容を維持する"""
         if self.num_actions != num_actions:
+            old_q_table = self.q_table
             self.num_actions = num_actions
             new_q_table = defaultdict(lambda: np.zeros(self.num_actions))
-            # 既存のQテーブルの値を新しいサイズにコピー（可能な範囲で）
-            if hasattr(self, 'q_table'): # 初回初期化時以外
-                for state, values in self.q_table.items():
+
+            if old_q_table:
+                for state, old_values in old_q_table.items():
                     new_values = np.zeros(self.num_actions)
-                    min_len = min(len(values), len(new_values))
-                    new_values[:min_len] = values[:min_len]
+                    num_to_copy = min(len(old_values), len(new_values))
+                    new_values[:num_to_copy] = old_values[:num_to_copy]
                     new_q_table[state] = new_values
             self.q_table = new_q_table
 
     def to_json(self):
-        """外部（例: server.py）に保存するためにモデルをJSONシリアライズ可能な辞書に変換"""
+        """モデルをJSONシリアライズ可能な辞書に変換"""
         return {
             "concentration_map": self.concentration_map.tolist(),
-            "q_table": {str(k): v.tolist() for k, v in self.q_table.items()}, # キーを文字列に変換
+            "q_table": {str(k): v.tolist() for k, v in self.q_table.items()},
             "num_actions": self.num_actions
         }
 
-    def apply_completion_feedback(self, completion_time_iso, rating):
-        """完了報告モーダルの情報を元に集中度マップを更新する（Flaskの/feedbackから呼ばれる）"""
-        completion_time = datetime.fromisoformat(completion_time_iso.replace('Z', '+00:00'))
-        # どの曜日のどの時間かを計算（週の頭を月曜として計算）
-        start_of_week = datetime.now() - timedelta(days=datetime.now().weekday())
-        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0) # 時刻を00:00:00にする
+    def apply_completion_feedback(self, start_time_iso, end_time_iso, rating):
+        """完了報告の情報を元に、集中度マップを更新する"""
+        if not start_time_iso or not end_time_iso:
+            return
+        try:
+            start_utc = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
+            end_utc = datetime.fromisoformat(end_time_iso.replace('Z', '+00:00'))
+            start_time_jst = start_utc.astimezone(JST)
+            end_time_jst = end_utc.astimezone(JST)
+
+            now_jst = datetime.now(JST)
+            start_of_week = now_jst - timedelta(days=now_jst.weekday())
+            start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            start_delta_seconds = max(0, (start_time_jst - start_of_week).total_seconds())
+            end_delta_seconds = max(0, (end_time_jst - start_of_week).total_seconds())
+            start_slot = int(start_delta_seconds / 1800)
+            end_slot = int(end_delta_seconds / 1800)
+
+            for i in range(start_slot, end_slot):
+                if 0 <= i < TOTAL_SLOTS:
+                    old_value = self.concentration_map[i]
+                    self.concentration_map[i] += ALPHA * (rating - old_value)
+        except Exception as e:
+            print(f"[フィードバックエラー] 集中度マップ更新中にエラー: {e}")
+
+    def apply_rejection_feedback(self, state, action_index, penalty):
+        """提案が拒否されたフィードバックを適用し、特定のQ値を直接更新する"""
+        if not (0 <= action_index < self.num_actions):
+            return
         
-        # 完了時刻が週の頭から何秒経過したか
-        delta_seconds = (completion_time - start_of_week).total_seconds()
-        
-        if delta_seconds >= 0: # 週の開始以降の時刻であれば処理
-            slot_index = int(delta_seconds / 1800) # 30分 = 1800秒 でスロットインデックスを計算
-            if 0 <= slot_index < TOTAL_SLOTS: # 有効なスロット範囲内であれば更新
-                print(f"[フィードバック適用] スロット {slot_index} ({completion_time.strftime('%Y-%m-%d %H:%M')}) の評価を {rating} 点で更新。")
-                # 集中度マップを更新: ALPHA（学習率）に応じてフィードバックを既存の値に反映
-                self.concentration_map[slot_index] += ALPHA * (rating - self.concentration_map[slot_index])
-        
+        old_q_value = self.q_table[state][action_index]
+        self.q_table[state][action_index] += penalty
+        print(f"\n[フィードバック適用] 拒否された提案(state:{state}, action:{action_index})にペナルティ適用。")
+        print(f"  - Q値を更新: {old_q_value:.2f} -> {self.q_table[state][action_index]:.2f}")
+
     def apply_skip_feedback(self, start_slot, end_slot):
-        """指定された時間帯の集中度マップにペナルティを適用する（将来的な日次学習などで使用）"""
-        print(f"\n[フィードバック適用] スロット {start_slot}-{end_slot} の評価を下げます。")
+        """スキップされた時間帯の集中度マップにペナルティを適用する"""
+        print(f"\n[スキップフィードバック適用] スロット {start_slot}-{end_slot} の評価を下げます。")
         for i in range(start_slot, end_slot):
             if 0 <= i < len(self.concentration_map):
-                self.concentration_map[i] += SKIP_PENALTY # スキップペナルティを適用
+                self.concentration_map[i] += SKIP_PENALTY
 
 # --- 3. AIコアロジック（環境とエージェント） ---
 class Task:
     """タスク情報を保持するクラス"""
     def __init__(self, id, name, required_slots, deadline_str, rescheduled=False):
-        self.id = id # Reactのtask.idを保持
+        self.id = id
         self.name = name
-        self.required_slots = required_slots # 必要な30分スロット数
-        self.remaining_slots = required_slots # 残りのスロット数
-        self.rescheduled = rescheduled # 再スケジュールされたタスクかどうかのフラグ
+        self.required_slots = required_slots
+        self.remaining_slots = required_slots
+        self.rescheduled = rescheduled
 
         if deadline_str:
             try:
-                # ISOフォーマット（'YYYY-MM-DDTHH:MM:SSZ'）を優先
-                self.deadline = datetime.fromisoformat(deadline_str.replace('Z', '+00:00'))
+                deadline_utc = datetime.fromisoformat(deadline_str.replace('Z', '+00:00'))
+                self.deadline = deadline_utc.astimezone(JST)
             except ValueError:
-                # 'YYYY-MM-DD' の形式の場合、その日の終わりを期限とする
-                self.deadline = datetime.strptime(deadline_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                naive_deadline = datetime.strptime(deadline_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                self.deadline = naive_deadline.replace(tzinfo=JST)
         else:
-            # 期限が設定されていない場合はデフォルトで30日後
-            self.deadline = datetime.now() + timedelta(days=30)
+            self.deadline = datetime.now(JST) + timedelta(days=30)
 
     def __repr__(self):
-        return f"Task(id={self.id}, name={self.name}, rescheduled={self.rescheduled}, remaining={self.remaining_slots})"
+        return f"Task(id={self.id}, name={self.name}, remaining={self.remaining_slots})"
 
 class SchedulerEnv:
-    """スケジューリング環境を表すクラス（強化学習の'環境'）"""
-    def __init__(self, tasks, ng_zones, start_time, concentration_map):
-        self.tasks_master = tasks # 元のタスクリスト
-        self.ng_zones = ng_zones # 不可避な時間帯（NGゾーン）
-        self.start_time = start_time # スケジュール開始時刻（通常は週の頭）
-        self.concentration_map = concentration_map # 外部から受け取る集中度マップ
-        # シミュレーション用の隠れた真の集中度マップ（学習のシミュレーション用）
-        self.true_concentration_map = self._create_true_concentration_map() 
+    """スケジューリング環境を表すクラス"""
+    def __init__(self, tasks, ng_zones, concentration_map):
+        self.tasks_master = tasks
+        self.ng_zones = ng_zones
+        now_in_jst = datetime.now(JST)
+        self.start_time = now_in_jst - timedelta(days=now_in_jst.weekday())
+        self.start_time = self.start_time.replace(hour=0, minute=0, second=0, microsecond=0,tzinfo=JST)#tzinfo=JST引数追加しみず
+        self.concentration_map = concentration_map
         self.reset()
 
     def reset(self):
-        """環境を初期状態にリセットする"""
-        # タスクリストをコピーして、残りのスロット数をリセット
-        self.tasks = [Task(t.id, t.name, t.required_slots, t.deadline.strftime("%Y-%m-%d %H:%M:%S"), t.rescheduled) for t in self.tasks_master]
-        self.schedule = ["-" for _ in range(TOTAL_SLOTS)] # スケジュールを空にする
-        self.current_slot = 0 # 現在のスロットをリセット
-        self.done = False # エピソード終了フラグ
-        return self.current_slot # 初期状態（現在のスロット）を返す
-
-    def _create_true_concentration_map(self):
-        """ユーザーの隠れた集中度傾向を定義する（シミュレーション用）"""
-        cmap = np.ones(TOTAL_SLOTS) * 2.0 # 全て2.0で初期化
-        for day in range(DAYS_IN_WEEK):
-            offset = day * SLOTS_PER_DAY # その日の開始スロット
-            # 特定の時間帯に集中度が高い/低い傾向を設定
-            cmap[offset + 18 : offset + 24] = 5.0 # 午前 (9:00-12:00) は高集中
-            cmap[offset + 26 : offset + 34] = 1.0 # 午後 (13:00-17:00) は低集中
-            cmap[offset + 44 : offset + 48] = 4.0 # 深夜 (22:00-24:00) に強い
-        return cmap
+        self.tasks = [Task(t.id, t.name, t.required_slots, t.deadline.isoformat() if hasattr(t, 'deadline') and t.deadline else None, t.rescheduled) for t in self.tasks_master]
+        self.schedule = ["-" for _ in range(TOTAL_SLOTS)]
+        self.current_slot = 0
+        self.done = False
+        return self.current_slot
 
     def get_possible_actions(self, current_slot):
-        """現在のスロットから可能な行動（タスク配置または何もしない）を返す"""
         possible_actions = []
         for i, task in enumerate(self.tasks):
-            if task.remaining_slots > 0: # 残りスロットがあるタスクのみ
+            if task.remaining_slots > 0:
                 duration = task.remaining_slots
-                # 現在のスロットからタスクを配置できるか、NGゾーンや既にスケジュール済みでないかチェック
-                if current_slot + duration <= TOTAL_SLOTS and \
-                   all(current_slot + j not in self.ng_zones and self.schedule[current_slot + j] == "-" for j in range(duration)):
-                    possible_actions.append(i) # タスクのインデックスを可能な行動として追加
-        possible_actions.append(len(self.tasks)) # 何もしない行動 (タスクリストの長さがインデックス)
+                if current_slot + duration <= TOTAL_SLOTS and all(current_slot + j not in self.ng_zones and self.schedule[current_slot + j] == "-" for j in range(duration)):
+                    possible_actions.append(i)
+        possible_actions.append(len(self.tasks))
         return possible_actions
 
     def step(self, action_idx):
-        """選択された行動（タスクブロックの配置 or 何もしない）を実行する"""
         reward = 0
-        t_len = len(self.tasks) # タスクの総数
-
-        if action_idx == t_len: # 何もしない行動を選択した場合
-            reward = -0.1 # 小さなペナルティ
-            self.current_slot += 1 # 1スロット進む
-        else: # 特定のタスクを配置する行動を選択した場合
+        t_len = len(self.tasks)
+        if action_idx == t_len:
+            reward = -0.1
+            self.current_slot += 1
+        else:
             task = self.tasks[action_idx]
             duration = task.remaining_slots
             block_slots = range(self.current_slot, self.current_slot + duration)
-            
-            # 集中度マップに基づく報酬の計算
             reward = sum(self.concentration_map[s] for s in block_slots)
 
-            # 締め切りが近いタスクへのボーナス
-            if (task.deadline - (self.start_time + timedelta(minutes=30 * self.current_slot))).days < 2:
-                reward += 10.0
-            # 再スケジュールされたタスクへの報酬ボーナス
+            if task.deadline:
+                completion_time = self.start_time + timedelta(minutes=30 * (self.current_slot + duration))
+                time_until_deadline = task.deadline - completion_time
+                if time_until_deadline.total_seconds() < 0:
+                    reward -= 50.0
+                else:
+                    days_until = time_until_deadline.total_seconds() / (24 * 3600)
+                    deadline_bonus = 20.0 * max(0, 1 - (days_until / 7.0))
+                    reward += deadline_bonus
             if task.rescheduled:
                 reward += RESCHEDULE_REWARD_BONUS
             
-            # スケジュールにタスクを配置
             for i in range(duration):
                 self.schedule[self.current_slot + i] = task.id
-            task.remaining_slots = 0 # タスク完了
-            self.current_slot += duration # スロットを進める
+            task.remaining_slots = 0
+            self.current_slot += duration
 
-        # エピソード終了条件のチェック
-        all_tasks_done = all(t.remaining_slots <= 0 for t in self.tasks) # 全タスク完了したか
-        self.done = all_tasks_done or self.current_slot >= TOTAL_SLOTS # 全タスク完了または全スロット終了
-
+        all_tasks_done = all(t.remaining_slots <= 0 for t in self.tasks)
+        self.done = all_tasks_done or self.current_slot >= TOTAL_SLOTS
         if self.done and not all_tasks_done:
-            reward -= sum(t.remaining_slots for t in self.tasks) * 10.0 # 未完了タスクへの大きなペナルティ
+            reward -= sum(t.remaining_slots for t in self.tasks) * 10.0
         
         return self.current_slot, reward, self.done
 
 class QLearningAgent:
-    """Q学習エージェントクラス（強化学習の'エージェント'）"""
+    """Q学習エージェントクラス"""
     def __init__(self, ai_model):
-        self.model = ai_model # AIModelオブジェクトを保持 (Qテーブルと集中度マップを共有)
-        self.epsilon = EPSILON_START # 探索率
+        self.model = ai_model
+        self.epsilon = EPSILON_START
 
     def choose_action(self, state, possible_actions):
-        """行動を選択する (探索と活用のトレードオフ)"""
-        # 可能な行動が「何もしない」のみの場合、それを選ぶ
-        if len(possible_actions) <= 1: # 何もしない行動のみの場合 (possible_actionsには最低1つ含まれる)
-            return self.model.num_actions - 1 # 何もしない行動のインデックス
-        
+        if len(possible_actions) <= 1:
+            return self.model.num_actions - 1
         if random.uniform(0, 1) < self.epsilon:
-            return random.choice(possible_actions) # 探索: ランダムに行動を選択
+            return random.choice(possible_actions)
         else:
-            # 活用: Qテーブルに基づいて最適な行動を選択
             q_values = self.model.q_table[state]
-            # 可能な行動の中からQ値が最大のものを選択
-            max_q = max(q_values[a] for a in possible_actions)
-            # 最大Q値を持つ行動が複数ある場合はランダムに一つ選択
+            max_q = -np.inf
+            for action_index in possible_actions:
+                if q_values[action_index] > max_q:
+                    max_q = q_values[action_index]
             best_actions = [a for a in possible_actions if q_values[a] == max_q]
             return random.choice(best_actions)
 
     def learn(self, state, action, reward, next_state, next_possible_actions):
-        """Qテーブルを更新する（学習）"""
-        old_value = self.model.q_table[state][action] # 現在のQ値
+        old_value = self.model.q_table[state][action]
+        next_max_q = 0
+        if next_possible_actions:
+            q_values_next = self.model.q_table[next_state]
+            if len(q_values_next) > 0:
+                next_max_q = max(q_values_next[na] for na in next_possible_actions)
         
-        # 次の状態での最大のQ値を計算
-        # 次の可能な行動が「何もしない」のみの場合を考慮
-        next_max_q = max(self.model.q_table[next_state][na] for na in next_possible_actions) \
-                     if len(next_possible_actions) > 1 \
-                     else self.model.q_table[next_state][self.model.num_actions - 1]
-        
-        # Q学習の更新式
         new_value = old_value + ALPHA * (reward + GAMMA * next_max_q - old_value)
         self.model.q_table[state][action] = new_value
 
     def decay_epsilon(self):
-        """探索率epsilonを減衰させる"""
         if self.epsilon > EPSILON_MIN:
             self.epsilon *= EPSILON_DECAY
 
-
 # --- 4. データ変換層 ---
-def prepare_inputs_from_react(react_tasks, unavailable_slots=[], sleep_hours=[(0,7)]):
-    """
-    Reactから受け取ったデータをPythonのAIが使える形式に変換する。
-    FlaskのAPIから呼ばれることを想定。
-    Args:
-        react_tasks (list): Reactのtasksステートの配列（辞書形式）
-        unavailable_slots (list): ユーザー定義の固定の予定リスト（辞書形式）
-        sleep_hours (list of tuples): 睡眠時間帯のリスト
-    Returns:
-        tuple: (Taskオブジェクトのリスト, NGゾーンのインデックスリスト)
-    """
+# ai_logic.py の prepare_inputs_from_react 関数を修正
+
+def prepare_inputs_from_react(react_tasks, unavailable_slots=[], existing_tasks=[], for_learning=False):
+    # --- ★ここからデバッグ★ ---
+    print("\n" + "="*20)
+    print("--- NGゾーン計算デバッグ開始 ---")
+    print(f"入力された固定予定(unavailable_slots): {json.dumps(unavailable_slots, indent=2, ensure_ascii=False)}")
+    # --- ★ここまでデバッグ★ ---
+
     tasks_list = []
-    for task in react_tasks:
-        # 完了済み、非表示のタスクは除外（AI提案や学習の対象外）
-        if not task.get('completed', False) and not task.get('hidden', False) and task.get('estimatedTime', 0) > 0:
-            tasks_list.append(
-                Task(id=task['id'], name=task['title'],
-                     required_slots=-(-task['estimatedTime'] // 30), # 分を30分スロットに変換（切り上げ）
-                     deadline_str=task['deadline'],
-                     rescheduled=task.get('rescheduled', False)) # 再スケジュールフラグを渡す
-            )
+    # ( ... tasks_listを作成するロジックはそのまま ... )
+    for task_data in react_tasks:
+        if not (task_data.get('estimatedTime') and int(task_data['estimatedTime']) > 0):
+            continue
+        is_target_task = for_learning or ((not task_data.get('completed', False) and not task_data.get('start')) or task_data.get('rescheduled', False))
+        if is_target_task:
+            tasks_list.append(Task(id=task_data.get('id', 'temp-id'), name=task_data.get('title', '無題'), required_slots=-(-int(task_data['estimatedTime']) // 30), deadline_str=task_data.get('deadline'), rescheduled=task_data.get('rescheduled', False)))
 
-    ng_zones = set() # 不可避な時間帯を格納するセット
-    today = datetime.now().date()
-    today_weekday = today.weekday() # Pythonの曜日 (月=0, ..., 日=6)
 
-    # 睡眠時間をNGゾーンに追加
-    for day_offset in range(DAYS_IN_WEEK): # 今週の7日間を対象
-        for start_h, end_h in sleep_hours:
-            for hour in range(start_h, end_h):
-                for minute_slot in [0, 1]: # 30分スロット（0分と30分）
-                    ng_zones.add(day_offset * SLOTS_PER_DAY + hour * 2 + minute_slot)
+    ng_zones = set()
+    now_jst = datetime.now(JST)
+    start_of_week = now_jst - timedelta(days=now_jst.weekday())
+    start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # ユーザー定義の固定の予定をNGゾーンに追加
+    # ( ... NGゾーンを計算するロジックはそのまま ... )
     for slot in unavailable_slots:
-        for day_str in slot.get('dayOfWeek', []): # dayOfWeek は文字列の配列（例: ["1", "3", "5"]）
-            day_of_week_int = int(day_str) # JSの曜日(0-6, Sun-Sat)からPythonの曜日へ
+        for day_str in slot.get('dayOfWeek', []):
+            try:
+                day_of_week_int = int(day_str)
+                for day_offset in range(DAYS_IN_WEEK):
+                    target_date = start_of_week.date() + timedelta(days=day_offset)
+                    python_weekday = (target_date.weekday() + 1) % 7
+                    if python_weekday == day_of_week_int:
+                        start_h, start_m = map(int, slot['startTime'].split(':'))
+                        end_h, end_m = map(int, slot['endTime'].split(':'))
+                        start_slot_of_day = start_h * 2 + start_m // 30
+                        end_slot_of_day = end_h * 2 + end_m // 30
+                        base_slot_index = day_offset * SLOTS_PER_DAY
+                        for s in range(start_slot_of_day, end_slot_of_day):
+                            ng_zones.add(base_slot_index + s)
+            except (ValueError, KeyError):
+                pass
 
-            for day_offset in range(DAYS_IN_WEEK):
-                # 実行日の曜日を基準に、対象の曜日が今週の何日後かを計算
-                # (today_weekday + day_offset) % 7 が現在処理している日付の曜日となる
-                if (today_weekday + day_offset) % 7 == day_of_week_int:
-                    start_h, start_m = map(int, slot['startTime'].split(':'))
-                    end_h, end_m = map(int, slot['endTime'].split(':'))
-
-                    start_slot = day_offset * SLOTS_PER_DAY + start_h * 2 + start_m // 30
-                    end_slot = day_offset * SLOTS_PER_DAY + end_h * 2 + end_m // 30
-
-                    # 終了時刻が含まれないようにするため、rangeの終点は-1しない
+    for task in existing_tasks:
+        start_str, end_str = task.get('start'), task.get('end')
+        if start_str and end_str:
+            try:
+                start_time_utc = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                end_time_utc = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                start_time_jst = start_time_utc.astimezone(JST)
+                end_time_jst = end_time_utc.astimezone(JST)
+                start_delta = (start_time_jst - start_of_week).total_seconds()
+                end_delta = (end_time_jst - start_of_week).total_seconds()
+                if start_delta >= 0:
+                    start_slot = int(start_delta / 1800)
+                    end_slot = int(end_delta / 1800)
                     for s in range(start_slot, end_slot):
-                        ng_zones.add(s)
+                        if 0 <= s < TOTAL_SLOTS:
+                            ng_zones.add(s)
+            except (ValueError, TypeError):
+                pass
+    
+    # --- ★ここからデバッグ★ ---
+    # ログが長くなりすぎないよう、最初の50件だけ表示
+    print(f"計算後のNGゾーン(一部): {sorted(list(ng_zones))[:50]}...")
+    print(f"NGゾーンの総数: {len(ng_zones)}")
+    print("--- NGゾーン計算デバッグ終了 ---")
+    print("="*20 + "\n")
+    # --- ★ここまでデバッグ★ ---
 
-    # Googleカレンダーの予定は、今回は `unavailable_slots` の引数からは直接受け取らないが
-    # 必要に応じてここに追加するロジックを検討する。
-    # (server.py の /suggest-slot エンドポイントのデータに googleEvents を含める必要がある)
     return tasks_list, list(ng_zones)
+    tasks_list = []
+    for task_data in react_tasks:
+        if not (task_data.get('estimatedTime') and int(task_data['estimatedTime']) > 0):
+            continue
+        is_target_task = for_learning or ((not task_data.get('completed', False) and not task_data.get('start')) or task_data.get('rescheduled', False))
+        if is_target_task:
+            tasks_list.append(Task(id=task_data.get('id', 'temp-id'), name=task_data.get('title', '無題'), required_slots=-(-int(task_data['estimatedTime']) // 30), deadline_str=task_data.get('deadline'), rescheduled=task_data.get('rescheduled', False)))
 
+    ng_zones = set()
+    now_jst = datetime.now(JST)
+    start_of_week = now_jst - timedelta(days=now_jst.weekday())
+    start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0,tzinfo=JST)#tzinfo=JST引数追加しみず
+
+    #ここから変更しみず
+    # ReactのgetDay()は日曜=0, 月曜=1, ..., 土曜=6
+    # Pythonのweekday()は月曜=0, 火曜=1, ..., 日曜=6
+    # 変換マップ: Reactの曜日インデックス -> Pythonの曜日インデックス
+    react_to_python_weekday_map = {
+        0: 6, # 日曜
+        1: 0, # 月曜
+        2: 1, # 火曜
+        3: 2, # 水曜
+        4: 3, # 木曜
+        5: 4, # 金曜
+        6: 5  # 土曜
+    }
+
+    for slot in unavailable_slots:
+        for day_str in slot.get('dayOfWeek', []):
+            try:
+                react_weekday_int = int(day_str)
+                python_target_weekday = react_to_python_weekday_map.get(react_weekday_int)
+                
+                if python_target_weekday is None:
+                    print(f"警告: 不明な曜日インデックス '{react_weekday_int}' が検出されました。スキップします。")
+                    continue
+
+                start_h, start_m = map(int, slot['startTime'].split(':'))
+                end_h, end_m = map(int, slot['endTime'].split(':'))
+
+                start_slot_of_day = (start_h * 60 + start_m) // 30
+                end_slot_of_day = (end_h * 60 + end_m) // 30
+                
+                # 変更: 終了時刻の扱いの改善
+                # 終了時刻が00分の場合、その前の30分スロットまでとする（例: 10:00 -> 9:30まで）
+                # ただし、00:00-00:00 のような指定は考慮しない
+                if end_m == 0 and end_h != 0:
+                    end_slot_of_day -= 1
+                # 23:59 の場合、その日の最後のスロット (47) を含むように調整
+                if end_h == 23 and end_m == 59:
+                    end_slot_of_day = SLOTS_PER_DAY - 1 # 47
+
+                # 変更: 過去1週間と未来1週間（合計2週間分）を考慮してNGゾーンを設定
+                for week_offset in range(-1, 2): # 前週(-1), 今週(0), 来週(1)
+                    for day_offset_in_week in range(DAYS_IN_WEEK):
+                        # Pythonのweekday()と一致する曜日のみ処理
+                        if day_offset_in_week == python_target_weekday:
+                            # 週の始まりからの絶対スロットインデックスの基点を計算
+                            # ここで TOTAL_SLOTS * 2 の範囲は、前週から来週までをカバーするため
+                            base_slot_index = (week_offset * DAYS_IN_WEEK + day_offset_in_week) * SLOTS_PER_DAY
+                            
+                            # 日をまたぐ設定 (例: 22:00 - 02:00) の場合
+                            if end_slot_of_day <= start_slot_of_day:
+                                # 開始時刻からその日の終わりまで
+                                for s in range(start_slot_of_day, SLOTS_PER_DAY):
+                                    absolute_slot = base_slot_index + s
+                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2: 
+                                        ng_zones.add(absolute_slot)
+                                # 翌日の開始から終了時刻まで
+                                next_day_base_slot_index = (week_offset * DAYS_IN_WEEK + day_offset_in_week + 1) * SLOTS_PER_DAY
+                                for s in range(0, end_slot_of_day + 1): # +1 で終了スロットを含むように修正
+                                    absolute_slot = next_day_base_slot_index + s
+                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2:
+                                        ng_zones.add(absolute_slot)
+                            else: # 日をまたがない場合
+                                for s in range(start_slot_of_day, end_slot_of_day + 1): # 変更: +1 で終了スロットを含む
+                                    absolute_slot = base_slot_index + s
+                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2:
+                                        ng_zones.add(absolute_slot)
+            except (ValueError, KeyError) as e:
+                print(f"固定予定のパースエラー: {e}, slot: {slot}")
+
+    # 変更: 既に配置済みのタスクをNGゾーンに追加するロジック全体
+    for task in existing_tasks:
+        start_str = task.get('start')
+        end_str = task.get('end')
+
+        if start_str and end_str:
+            try:
+                start_time_utc = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                end_time_utc = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+
+                start_time_jst = start_time_utc.astimezone(JST)
+                end_time_jst = end_time_utc.astimezone(JST)
+
+                start_delta_seconds = (start_time_jst - start_of_week).total_seconds()
+                end_delta_seconds = (end_time_jst - start_of_week).total_seconds()
+
+                if start_delta_seconds >= 0:
+                    start_slot = int(start_delta_seconds / 1800)
+                    end_slot = int(end_delta_seconds / 1800)
+                    
+                    for s in range(start_slot, end_slot): # end_slotは含まれないのでこれでOK
+                        if 0 <= s < TOTAL_SLOTS: # TOTAL_SLOTSは1週間分なので、これを超えないように
+                            ng_zones.add(s)
+            except (ValueError, TypeError) as e:
+                print(f"既存タスクの日時パースエラー: {e}, task: {task}")
+    
+
+    return tasks_list, sorted(list(ng_zones))#ここまで
 
 # --- 5. 実行ロジック ---
-def suggest_best_slot(target_task, ng_zones, ai_model):
-    """
-    単一タスクに最適な時間枠を高速に提案する（Flaskの/suggest-slotから呼ばれる）
-    この関数はモデルを学習させるのではなく、学習済みモデルを使って推論を行う。
-    """
-    best_slot, max_reward = -1, -float('inf')
-    duration = target_task.required_slots # タスクに必要なスロット数
-    # 今日の0時0分0秒から計算
-    start_of_week = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) 
+
+def suggest_best_slot(target_task, uncompleted_tasks, ng_zones, ai_model):
+    """単一タスクに最適な時間枠を提案する（ローリングウィーク対応版）"""
+    all_tasks = uncompleted_tasks + [target_task]
+    num_actions = len(all_tasks) + 1
+    ai_model.set_num_actions(num_actions)
+    target_action_index = len(all_tasks) - 1
+
+    best_slot, max_score = -1, -float('inf')
+    duration = target_task.required_slots
     
-    for slot in range(TOTAL_SLOTS): # 全てのスロットを探索
-        if slot + duration > TOTAL_SLOTS: # スロットの終わりを超過する場合はスキップ
+    now_jst = datetime.now(JST)
+    start_of_week_jst = (now_jst - timedelta(days=now_jst.weekday())).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST)
+    
+    min_search_slot = int((now_jst - start_of_week_jst).total_seconds() / 1800) + 1
+    
+    found_placeable_slot = False
+    deadline_missed = True
+
+    for slot in range(min_search_slot, TOTAL_SLOTS_CONSIDERED_FOR_NG):
+        # 検索範囲の終点も合わせて修正
+        if slot + duration > TOTAL_SLOTS_CONSIDERED_FOR_NG:
             break
+            
+        slot_time_jst = start_of_week_jst + timedelta(minutes=30 * slot)
+        if target_task.deadline and target_task.deadline < slot_time_jst:
+            continue
+        deadline_missed = False
+
+        if any(slot + j in ng_zones for j in range(duration)):
+            continue
+        found_placeable_slot = True
         
-        slot_time = start_of_week + timedelta(minutes=30 * slot) # 現在のスロットの開始時刻
-        if slot_time < datetime.now(): continue # 過去の時間はスキップ
-        if target_task.deadline < slot_time: continue # タスクの期限を過ぎていたらスキップ
-
-        # この時間枠にタスクを配置できるか（NGゾーンや他のタスクと重ならないか）チェック
-        is_placeable=all(slot+j not in ng_zones for j in range(duration))
-        if is_placeable:
-            # 報酬を計算（集中度マップの値を合計）
-            reward=sum(ai_model.concentration_map[s] for s in range(slot, slot+duration))
-            # 再スケジュールされたタスクにはボーナス報酬を追加
-            if target_task.rescheduled: reward += RESCHEDULE_REWARD_BONUS
-            
-            if reward > max_reward: # より良い報酬が見つかったら更新
-                max_reward, best_slot = reward, slot
-            
-    if best_slot != -1: # 最適なスロットが見つかった場合
-        start_time = start_of_week + timedelta(minutes=30 * best_slot)
+        q_value = ai_model.q_table[slot][target_action_index]
+        # 集中度マップは1週間分しかないので、インデックスを剰余で丸める
+        concentration_score = sum(ai_model.concentration_map[s % TOTAL_SLOTS] for s in range(slot, slot + duration))
+        final_score = (Q_VALUE_WEIGHT * q_value) + (CONCENTRATION_WEIGHT * concentration_score)
+        
+        if target_task.rescheduled:
+            final_score += RESCHEDULE_REWARD_BONUS
+        
+        if final_score > max_score:
+            max_score, best_slot = final_score, slot
+    
+    if best_slot != -1:
+        start_time = start_of_week_jst + timedelta(minutes=30 * best_slot)
         end_time = start_time + timedelta(minutes=30 * duration)
-        # Reactに返す形式で結果を返す
-        return {"taskId":target_task.id, "title":target_task.name, "start":start_time.isoformat(), "end":end_time.isoformat()}
+        # 成功時は、suggestion と共に reason: None を返す
+        return {"suggestion": {"taskId": target_task.id, "title": target_task.name, "start": start_time.isoformat(), "end": end_time.isoformat()}, "reason": None}
     else:
-        return None # 見つからなかった場合
+        # 失敗理由の分析ロジック
+        reason = "固定予定等で、このタスクを入れられる連続した空き時間がありません。" if not deadline_missed and not found_placeable_slot else "締め切りまでに可能な時間がありません。" if deadline_missed else "不明な理由で提案できませんでした。"
+        return {"suggestion": None, "reason": reason}
 
+def learning(all_tasks, ng_zones, saved_model_data=None):
+    """AIモデルの継続的な学習"""
+    if not all_tasks:
+        return saved_model_data
 
-def run_background_learning(all_tasks, ng_zones, saved_model_data=None):
-    """
-    サーバー側で定期的に実行される、AIモデルの継続的な学習（Flaskの定期実行で呼ばれることを想定）
-    この関数は、モデルを学習・更新し、更新されたモデルデータを返す。
-    """
-    ai_model = AIModel(saved_model_data) # 既存モデルをロードまたは新規作成
-    ai_model.set_num_actions(len(all_tasks) + 1) # 行動数を設定
-    start_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    ai_model = AIModel(saved_model_data)
+    ai_model.set_num_actions(len(all_tasks) + 1)
     
-    env = SchedulerEnv(all_tasks, ng_zones, start_time, ai_model.concentration_map)
+    env = SchedulerEnv(all_tasks, ng_zones, ai_model.concentration_map)
     agent = QLearningAgent(ai_model)
-    
-    # 強化学習の学習エピソードを実行
+
     for _ in range(NUM_BACKGROUND_EPISODES):
-        state = env.reset() # 環境をリセット
+        state = env.reset()
         done = False
         while not done:
-            possible_actions = env.get_possible_actions(state) # 可能な行動を取得
-            action = agent.choose_action(state, possible_actions) # エージェントが行動を選択
-            next_state, reward, done = env.step(action) # 環境で行動を実行
+            possible_actions = env.get_possible_actions(state)
+            action = agent.choose_action(state, possible_actions)
+            next_state, reward, done = env.step(action)
             next_possible_actions = env.get_possible_actions(next_state)
-            agent.learn(state, action, reward, next_state, next_possible_actions) # エージェントが学習
-            state = next_state # 状態を更新
+            agent.learn(state, action, reward, next_state, next_possible_actions)
+            state = next_state
     
-    agent.decay_epsilon() # 探索率を減衰
-    
-    return ai_model.to_json() # 更新されたモデルデータをJSON形式で返す
+    agent.decay_epsilon()
+    return ai_model.to_json()
