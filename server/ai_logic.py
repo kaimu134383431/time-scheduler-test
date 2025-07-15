@@ -8,6 +8,7 @@ import json
 # JST (日本標準時) タイムゾーンオブジェクトを定義
 JST = timezone(timedelta(hours=+9))
 
+
 # --- 1. 設定項目 ---
 ALPHA = 0.1
 GAMMA = 0.9
@@ -16,7 +17,7 @@ EPSILON_DECAY = 0.999
 EPSILON_MIN = 0.05
 NUM_BACKGROUND_EPISODES = 200
 DAYS_IN_WEEK = 7
-SLOTS_PER_DAY = 48
+SLOTS_PER_DAY = 24
 TOTAL_SLOTS = DAYS_IN_WEEK * SLOTS_PER_DAY
 TOTAL_SLOTS_CONSIDERED_FOR_NG = TOTAL_SLOTS * 2 # 提案検索範囲を2週間に
 RESCHEDULE_REWARD_BONUS = 25.0
@@ -24,6 +25,7 @@ SKIP_PENALTY = -10.0
 REJECTION_PENALTY = -2.0
 Q_VALUE_WEIGHT = 1.0
 CONCENTRATION_WEIGHT = 0.8
+
 
 # --- 2. AIモデル管理クラス ---
 class AIModel:
@@ -39,24 +41,14 @@ class AIModel:
 
     def _initialize_new_model(self):
         """新規ユーザー用のモデルを初期値で作成"""
-        self.concentration_map = np.ones(TOTAL_SLOTS) * 2.5
-        self.num_actions = 0
-        self.q_table = defaultdict(lambda: np.zeros(0))
+        self.concentration_map = np.ones(TOTAL_SLOTS) * 2.5  # 初期集中度
+        self.num_actions = TOTAL_SLOTS  # 時間帯はTOTAL_SLOTS
+        self.q_table = defaultdict(lambda: np.zeros(self.num_actions))
 
     def set_num_actions(self, num_actions):
-        """タスク数に応じてQテーブルのaction数を確定させ、既存の学習内容を維持する"""
-        if self.num_actions != num_actions:
-            old_q_table = self.q_table
-            self.num_actions = num_actions
-            new_q_table = defaultdict(lambda: np.zeros(self.num_actions))
-
-            if old_q_table:
-                for state, old_values in old_q_table.items():
-                    new_values = np.zeros(self.num_actions)
-                    num_to_copy = min(len(old_values), len(new_values))
-                    new_values[:num_to_copy] = old_values[:num_to_copy]
-                    new_q_table[state] = new_values
-            self.q_table = new_q_table
+        """Qテーブルのaction数を設定"""
+        self.num_actions = num_actions
+        self.q_table = defaultdict(lambda: np.zeros(self.num_actions))
 
     def to_json(self):
         """モデルをJSONシリアライズ可能な辞書に変換"""
@@ -109,6 +101,7 @@ class AIModel:
             if 0 <= i < len(self.concentration_map):
                 self.concentration_map[i] += SKIP_PENALTY
 
+
 # --- 3. AIコアロジック（環境とエージェント） ---
 class Task:
     """タスク情報を保持するクラス"""
@@ -132,69 +125,6 @@ class Task:
     def __repr__(self):
         return f"Task(id={self.id}, name={self.name}, remaining={self.remaining_slots})"
 
-class SchedulerEnv:
-    """スケジューリング環境を表すクラス"""
-    def __init__(self, tasks, ng_zones, concentration_map):
-        self.tasks_master = tasks
-        self.ng_zones = ng_zones
-        now_in_jst = datetime.now(JST)
-        self.start_time = now_in_jst - timedelta(days=now_in_jst.weekday())
-        self.start_time = self.start_time.replace(hour=0, minute=0, second=0, microsecond=0,tzinfo=JST)#tzinfo=JST引数追加しみず
-        self.concentration_map = concentration_map
-        self.reset()
-
-    def reset(self):
-        self.tasks = [Task(t.id, t.name, t.required_slots, t.deadline.isoformat() if hasattr(t, 'deadline') and t.deadline else None, t.rescheduled) for t in self.tasks_master]
-        self.schedule = ["-" for _ in range(TOTAL_SLOTS)]
-        self.current_slot = 0
-        self.done = False
-        return self.current_slot
-
-    def get_possible_actions(self, current_slot):
-        possible_actions = []
-        for i, task in enumerate(self.tasks):
-            if task.remaining_slots > 0:
-                duration = task.remaining_slots
-                if current_slot + duration <= TOTAL_SLOTS and all(current_slot + j not in self.ng_zones and self.schedule[current_slot + j] == "-" for j in range(duration)):
-                    possible_actions.append(i)
-        possible_actions.append(len(self.tasks))
-        return possible_actions
-
-    def step(self, action_idx):
-        reward = 0
-        t_len = len(self.tasks)
-        if action_idx == t_len:
-            reward = -0.1
-            self.current_slot += 1
-        else:
-            task = self.tasks[action_idx]
-            duration = task.remaining_slots
-            block_slots = range(self.current_slot, self.current_slot + duration)
-            reward = sum(self.concentration_map[s] for s in block_slots)
-
-            if task.deadline:
-                completion_time = self.start_time + timedelta(minutes=30 * (self.current_slot + duration))
-                time_until_deadline = task.deadline - completion_time
-                if time_until_deadline.total_seconds() < 0:
-                    reward -= 50.0
-                else:
-                    days_until = time_until_deadline.total_seconds() / (24 * 3600)
-                    deadline_bonus = 20.0 * max(0, 1 - (days_until / 7.0))
-                    reward += deadline_bonus
-            if task.rescheduled:
-                reward += RESCHEDULE_REWARD_BONUS
-            
-            for i in range(duration):
-                self.schedule[self.current_slot + i] = task.id
-            task.remaining_slots = 0
-            self.current_slot += duration
-
-        all_tasks_done = all(t.remaining_slots <= 0 for t in self.tasks)
-        self.done = all_tasks_done or self.current_slot >= TOTAL_SLOTS
-        if self.done and not all_tasks_done:
-            reward -= sum(t.remaining_slots for t in self.tasks) * 10.0
-        
-        return self.current_slot, reward, self.done
 
 class QLearningAgent:
     """Q学習エージェントクラス"""
@@ -202,38 +132,28 @@ class QLearningAgent:
         self.model = ai_model
         self.epsilon = EPSILON_START
 
-    def choose_action(self, state, possible_actions):
-        if len(possible_actions) <= 1:
-            return self.model.num_actions - 1
+    def choose_action(self, possible_actions):
+        """バンディット問題におけるアクション（時間帯）を選択"""
         if random.uniform(0, 1) < self.epsilon:
             return random.choice(possible_actions)
         else:
-            q_values = self.model.q_table[state]
-            max_q = -np.inf
-            for action_index in possible_actions:
-                if q_values[action_index] > max_q:
-                    max_q = q_values[action_index]
-            best_actions = [a for a in possible_actions if q_values[a] == max_q]
+            q_values = self.model.q_table[0]  # 固定の状態から選択（状態遷移がないため）
+            max_q = max(q_values[action] for action in possible_actions)
+            best_actions = [action for action in possible_actions if q_values[action] == max_q]
             return random.choice(best_actions)
 
-    def learn(self, state, action, reward, next_state, next_possible_actions):
-        old_value = self.model.q_table[state][action]
-        next_max_q = 0
-        if next_possible_actions:
-            q_values_next = self.model.q_table[next_state]
-            if len(q_values_next) > 0:
-                next_max_q = max(q_values_next[na] for na in next_possible_actions)
-        
-        new_value = old_value + ALPHA * (reward + GAMMA * next_max_q - old_value)
-        self.model.q_table[state][action] = new_value
+    def learn(self, action, reward):
+        """Q学習による学習"""
+        old_value = self.model.q_table[0][action]
+        new_value = old_value + ALPHA * (reward - old_value)
+        self.model.q_table[0][action] = new_value
 
     def decay_epsilon(self):
         if self.epsilon > EPSILON_MIN:
             self.epsilon *= EPSILON_DECAY
 
-# --- 4. データ変換層 ---
-# ai_logic.py の prepare_inputs_from_react 関数を修正
 
+# --- 4. データ変換層 ---
 def prepare_inputs_from_react(react_tasks, unavailable_slots=[], existing_tasks=[], for_learning=False):
     # --- ★ここからデバッグ★ ---
     print("\n" + "="*20)
@@ -414,82 +334,32 @@ def prepare_inputs_from_react(react_tasks, unavailable_slots=[], existing_tasks=
 
     return tasks_list, sorted(list(ng_zones))#ここまで
 
-# --- 5. 実行ロジック ---
 
-def suggest_best_slot(target_task, uncompleted_tasks, ng_zones, ai_model):
-    """単一タスクに最適な時間枠を提案する（ローリングウィーク対応版）"""
-    all_tasks = uncompleted_tasks + [target_task]
-    num_actions = len(all_tasks) + 1
-    ai_model.set_num_actions(num_actions)
-    target_action_index = len(all_tasks) - 1
+# --- 4. 実行ロジック ---
+def suggest_best_slot(target_task, ng_zones, ai_model):
+    """最適な時間帯を提案する"""
+    possible_actions = [i for i in range(TOTAL_SLOTS) if i not in ng_zones]
+    
+    agent = QLearningAgent(ai_model)
+    best_slot = agent.choose_action(possible_actions)
+    
+    concentration_score = ai_model.concentration_map[best_slot]
+    reward = concentration_score  # 集中度が報酬となる
+    
+    agent.learn(best_slot, reward)
+    agent.decay_epsilon()
 
-    best_slot, max_score = -1, -float('inf')
-    duration = target_task.required_slots
+    start_time = datetime.now(JST) + timedelta(minutes=30 * best_slot)
+    end_time = start_time + timedelta(minutes=30 * target_task.required_slots)
     
-    now_jst = datetime.now(JST)
-    start_of_week_jst = (now_jst - timedelta(days=now_jst.weekday())).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST)
-    
-    min_search_slot = int((now_jst - start_of_week_jst).total_seconds() / 1800) + 1
-    
-    found_placeable_slot = False
-    deadline_missed = True
+    return {"suggestion": {"taskId": target_task.id, "title": target_task.name, "start": start_time.isoformat(), "end": end_time.isoformat()}, "reason": None}
 
-    for slot in range(min_search_slot, TOTAL_SLOTS_CONSIDERED_FOR_NG):
-        # 検索範囲の終点も合わせて修正
-        if slot + duration > TOTAL_SLOTS_CONSIDERED_FOR_NG:
-            break
-            
-        slot_time_jst = start_of_week_jst + timedelta(minutes=30 * slot)
-        if target_task.deadline and target_task.deadline < slot_time_jst:
-            continue
-        deadline_missed = False
-
-        if any(slot + j in ng_zones for j in range(duration)):
-            continue
-        found_placeable_slot = True
-        
-        q_value = ai_model.q_table[slot][target_action_index]
-        # 集中度マップは1週間分しかないので、インデックスを剰余で丸める
-        concentration_score = sum(ai_model.concentration_map[s % TOTAL_SLOTS] for s in range(slot, slot + duration))
-        final_score = (Q_VALUE_WEIGHT * q_value) + (CONCENTRATION_WEIGHT * concentration_score)
-        
-        if target_task.rescheduled:
-            final_score += RESCHEDULE_REWARD_BONUS
-        
-        if final_score > max_score:
-            max_score, best_slot = final_score, slot
-    
-    if best_slot != -1:
-        start_time = start_of_week_jst + timedelta(minutes=30 * best_slot)
-        end_time = start_time + timedelta(minutes=30 * duration)
-        # 成功時は、suggestion と共に reason: None を返す
-        return {"suggestion": {"taskId": target_task.id, "title": target_task.name, "start": start_time.isoformat(), "end": end_time.isoformat()}, "reason": None}
-    else:
-        # 失敗理由の分析ロジック
-        reason = "固定予定等で、このタスクを入れられる連続した空き時間がありません。" if not deadline_missed and not found_placeable_slot else "締め切りまでに可能な時間がありません。" if deadline_missed else "不明な理由で提案できませんでした。"
-        return {"suggestion": None, "reason": reason}
 
 def learning(all_tasks, ng_zones, saved_model_data=None):
-    """AIモデルの継続的な学習"""
-    if not all_tasks:
-        return saved_model_data
-
+    """AIモデルの学習"""
     ai_model = AIModel(saved_model_data)
-    ai_model.set_num_actions(len(all_tasks) + 1)
     
-    env = SchedulerEnv(all_tasks, ng_zones, ai_model.concentration_map)
-    agent = QLearningAgent(ai_model)
-
-    for _ in range(NUM_BACKGROUND_EPISODES):
-        state = env.reset()
-        done = False
-        while not done:
-            possible_actions = env.get_possible_actions(state)
-            action = agent.choose_action(state, possible_actions)
-            next_state, reward, done = env.step(action)
-            next_possible_actions = env.get_possible_actions(next_state)
-            agent.learn(state, action, reward, next_state, next_possible_actions)
-            state = next_state
+    for task in all_tasks:
+        suggest_best_slot(task, ng_zones, ai_model)
     
-    agent.decay_epsilon()
     return ai_model.to_json()
