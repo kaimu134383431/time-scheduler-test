@@ -6,6 +6,12 @@ import {
   signInWithCustomToken,
   onAuthStateChanged,
 } from "firebase/auth";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+} from "firebase/firestore"; // Firestore imports
 
 // Tailwind CSS is assumed to be available in the environment.
 // For icons, we'll use Lucide React icons.
@@ -20,10 +26,7 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
-  // Edit3, // 編集ボタンを削除するためコメントアウト
   Trash2,
-  // RotateCcw, // 再入力機能を削除するためコメントアウト
-  // Repeat, // 再入力機能を削除するためコメントアウト
   BarChart, // For stats
   Star, // For ratings
   ThumbsUp,
@@ -32,6 +35,8 @@ import {
   Clock9, // For fixed unavailability
   CalendarCheck, // For fixed unavailability list
   Rewind, // スキップアイコン用
+  Sun, // 朝型アイコン
+  Moon, // 夜型アイコン
 } from "lucide-react";
 
 // Firebase configuration placeholder - This setting will be overwritten by __firebase_config provided by the Canvas environment.
@@ -210,19 +215,21 @@ const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
 };
 
 function MainAppContent() {
-  // const [db, setDb] = useState(null); // Firestore db state removed
+  const [db, setDb] = useState(null); // Firestore db state
   const [auth, setAuth] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const authCheckCompletedRef = useRef(false); // Add a new ref
 
+  // New states for user profile type and AI model data
+  const [userProfileType, setUserProfileType] = useState(null); // 'morning', 'night', or null (not selected)
+  const [aiModelData, setAiModelData] = useState(null); // Stores the full AI model data (concentration_map, q_table)
+  const [showProfileTypeSelection, setShowProfileTypeSelection] = useState(false);
+
   const [tasks, setTasks] = useState([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskEstimate, setNewTaskEstimate] = useState("");
   const [newTaskDeadline, setNewTaskDeadline] = useState("");
-  // const [editingTask, setEditingTask] = useState(null); // 編集機能削除のためコメントアウト
-
-  // const [rescheduleInputs, setRescheduleInputs] = useState({}); // 再入力機能削除のためコメントアウト
 
   const [taskStats, setTaskStats] = useState({ week: 0, month: 0 });
 
@@ -285,7 +292,9 @@ function MainAppContent() {
 
       const app = initializeApp(firebaseConfig);
       const firebaseAuth = getAuth(app);
+      const firestoreDb = getFirestore(app); // Initialize Firestore
       setAuth(firebaseAuth);
+      setDb(firestoreDb); // Set db state
 
       const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
         if (!authCheckCompletedRef.current) {
@@ -344,6 +353,101 @@ function MainAppContent() {
       setIsAuthReady(true);
     }
   }, []);
+
+  // --- Fetch AI Model Data from Firestore ---
+  useEffect(() => {
+    const fetchAiModel = async () => {
+      if (!db || !currentUserId) return;
+
+      try {
+        const modelDocRef = doc(
+          db,
+          `artifacts/${appId}/users/${currentUserId}/ai_models`,
+          "user_model"
+        );
+        const docSnap = await getDoc(modelDocRef);
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setAiModelData(data.modelData);
+          setUserProfileType(data.userType);
+          setMessage({ text: "AIモデルをロードしました。", type: "info" });
+        } else {
+          // モデルが存在しない場合、ユーザーにタイプ選択を促す
+          setShowProfileTypeSelection(true);
+          setMessage({
+            text: "AIの初期設定のため、あなたのタイプを選択してください。",
+            type: "info",
+          });
+        }
+      } catch (error) {
+        console.error("Error fetching AI model:", error);
+        setMessage({
+          text: `AIモデルのロード中にエラーが発生しました: ${error.message}`,
+          type: "error",
+        });
+      }
+    };
+
+    if (currentUserId && db) {
+      fetchAiModel();
+    }
+  }, [currentUserId, db]);
+
+  // --- Save AI Model Data to Firestore ---
+  const saveAiModelToFirestore = async (modelData, userType) => {
+    if (!db || !currentUserId) {
+      console.warn("Firestore not ready or userId not available for saving AI model.");
+      return;
+    }
+    try {
+      const modelDocRef = doc(
+        db,
+        `artifacts/${appId}/users/${currentUserId}/ai_models`,
+        "user_model"
+      );
+      await setDoc(modelDocRef, { modelData: modelData, userType: userType });
+      console.log("AIモデルをFirestoreに保存しました。");
+    } catch (error) {
+      console.error("Error saving AI model to Firestore:", error);
+      setMessage({
+        text: `AIモデルの保存中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
+    }
+  };
+
+  // --- Handle User Profile Type Selection ---
+  const handleProfileTypeSelection = async (type) => {
+    setIsLoading(true);
+    try {
+      const modelFileName =
+        type === "morning"
+          ? "morning_person_initial_model.json"
+          : "night_owl_initial_model.json";
+      
+      // JSONファイルを直接fetchする (public/ 配下にあることを想定)
+      const response = await fetch(`/${modelFileName}`);
+      if (!response.ok) {
+        throw new Error(`Failed to load initial model: ${response.statusText}`);
+      }
+      const initialModelData = await response.json();
+
+      setAiModelData(initialModelData);
+      setUserProfileType(type);
+      await saveAiModelToFirestore(initialModelData, type); // 初期モデルをFirestoreに保存
+      setShowProfileTypeSelection(false);
+      setMessage({ text: `あなたのタイプを「${type === 'morning' ? '朝型' : '夜型'}」に設定しました。`, type: "success" });
+    } catch (error) {
+      console.error("Error setting profile type:", error);
+      setMessage({
+        text: `プロファイルタイプの設定中にエラーが発生しました: ${error.message}`,
+        type: "error",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // --- Google GSI Client Initialization ---
   useEffect(() => {
@@ -665,9 +769,6 @@ function MainAppContent() {
       );
 
       if (response.status !== 204 && response.ok) {
-        // response.ok は status 2xx をチェックするので、204は含まれる
-        // 204 No Content の場合は json() を呼び出すとエラーになるので注意
-        // response.ok が true で status が 204 以外の場合にのみ json() を試みる
         if (response.status !== 204) {
           const errorData = await response.json();
           console.error(
@@ -681,7 +782,6 @@ function MainAppContent() {
           return false;
         }
       }
-      // 204 No Content の場合はそのまま成功とみなす
 
       setMessage({
         text: "Googleカレンダーからイベントを削除しました。",
@@ -701,7 +801,7 @@ function MainAppContent() {
   };
 
   const handleRejectAndResuggest = async () => {
-    if (!currentUserId || !aiDateSuggestion) return;
+    if (!currentUserId || !aiDateSuggestion || !aiModelData) return; // aiModelData のチェックを追加
 
     setIsLoading(true);
     setMessage({
@@ -740,6 +840,7 @@ function MainAppContent() {
             react_tasks: allUncompletedTasks,
             unavailableSlots: userDefinedUnavailableSlots,
             existingTasks: existingPlacedTasks,
+            aiModelData: aiModelData, // 現在のAIモデルデータを送信
           }),
         }
       );
@@ -750,9 +851,13 @@ function MainAppContent() {
           text: `フィードバック学習中にエラー: ${errorData.error}`,
           type: "error",
         });
+      } else {
+        const updatedModel = await rejectResponse.json(); // 更新されたモデルデータを受け取る
+        setAiModelData(updatedModel); // モデルデータを更新
+        await saveAiModelToFirestore(updatedModel, userProfileType); // Firestoreに保存
       }
 
-      await requestAiSuggestion();
+      await requestAiSuggestion(); // 再提案を要求
     } catch (error) {
       console.error("Error rejecting and resuggesting:", error);
       setMessage({
@@ -777,6 +882,13 @@ function MainAppContent() {
       setMessage({
         text: "課題タイトルと見積もり時間は必須です。",
         type: "error",
+      });
+      return;
+    }
+    if (!aiModelData) { // AIモデルデータがロードされているか確認
+      setMessage({
+        text: "AIモデルのロードを待っています。しばらくお待ちください。",
+        type: "info",
       });
       return;
     }
@@ -809,6 +921,7 @@ function MainAppContent() {
           unavailableSlots: userDefinedUnavailableSlots,
           existingTasks: existingPlacedTasks, // NGゾーン用
           uncompletedTasks: uncompletedAndUnscheduledTasks, // Qテーブル評価用
+          aiModelData: aiModelData, // 現在のAIモデルデータを送信
         }),
       });
 
@@ -817,15 +930,20 @@ function MainAppContent() {
         throw new Error(errorData.error || "AI提案の取得に失敗しました");
       }
 
-      const suggestion = await response.json();
+      const suggestionResponse = await response.json();
       setAiDateSuggestion({
         title: newTaskTitle,
         estimatedTime: newTaskEstimate,
         suggestedSlot: {
-          start: new Date(suggestion.start),
-          end: new Date(suggestion.end),
+          start: new Date(suggestionResponse.start),
+          end: new Date(suggestionResponse.end),
         },
       });
+      // AIモデルデータが返された場合は更新
+      if (suggestionResponse.aiModelData) {
+        setAiModelData(suggestionResponse.aiModelData);
+        await saveAiModelToFirestore(suggestionResponse.aiModelData, userProfileType); // Firestoreに保存
+      }
       setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
     } catch (error) {
       console.error("Error requesting AI suggestion:", error);
@@ -841,7 +959,7 @@ function MainAppContent() {
   };
 
   const confirmAndAddTask = async () => {
-    if (!googleUserInfo || !currentUserId || !aiDateSuggestion) {
+    if (!googleUserInfo || !currentUserId || !aiDateSuggestion || !aiModelData) { // aiModelData のチェックを追加
       setMessage({
         text: "必要な情報が揃っていません。",
         type: "error",
@@ -929,9 +1047,15 @@ function MainAppContent() {
       });
       return;
     }
+    if (!aiModelData) { // AIモデルデータがロードされているか確認
+      setMessage({
+        text: "AIモデルのロードを待っています。しばらくお待ちください。",
+        type: "info",
+      });
+      return;
+    }
 
     // AI提案モード
-    // editingTask ステートは存在しないため、常にAI提案モードの条件で判定
     if (googleAccessToken && newTaskEstimate.trim()) {
       requestAiSuggestion();
     } else {
@@ -965,7 +1089,6 @@ function MainAppContent() {
           googleEventId: null,
         };
 
-        // 編集機能削除のため、常にPOST
         const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -987,7 +1110,6 @@ function MainAppContent() {
         setNewTaskTitle("");
         setNewTaskEstimate("");
         setNewTaskDeadline("");
-        // setEditingTask(null); // 編集機能削除のためコメントアウト
       } catch (error) {
         console.error("Error saving task manually:", error);
         setMessage({
@@ -1000,12 +1122,9 @@ function MainAppContent() {
     }
   };
 
-  // 編集機能削除のため、startEditTask 関数も削除
-  // const startEditTask = (task) => { ... };
-
   // 新しく追加: 期限切れタスクをスキップする関数
   const handleSkipTask = async (taskId) => {
-    if (!googleUserInfo || !currentUserId) return;
+    if (!googleUserInfo || !currentUserId || !aiModelData) return; // aiModelData のチェックを追加
 
     const taskToSkip = tasks.find((task) => task.id === taskId);
     if (!taskToSkip) return;
@@ -1023,6 +1142,7 @@ function MainAppContent() {
             taskId: taskId, // AI側での参照用
             startTime: taskToSkip.start,
             endTime: taskToSkip.end,
+            aiModelData: aiModelData, // 現在のAIモデルデータを送信
           }),
         });
 
@@ -1033,6 +1153,9 @@ function MainAppContent() {
             type: "error",
           });
         } else {
+          const updatedModel = await skipResponse.json(); // 更新されたモデルデータを受け取る
+          setAiModelData(updatedModel); // モデルデータを更新
+          await saveAiModelToFirestore(updatedModel, userProfileType); // Firestoreに保存
           setMessage({
             text: "課題をスキップしました（AIが学習します）。",
             type: "info",
@@ -1094,10 +1217,7 @@ function MainAppContent() {
       setIsLoading(true);
       try {
         // Google Event IDがあれば削除を試みる (期限内のタスクのみ)
-        // 期限切れタスクは元々Google Calendarに登録されない想定なので、削除処理は不要だが、
-        // 念のためtaskToUpdate.googleEventIdの存在とtaskToUpdate.startで確認
         if (taskToUpdate.googleEventId && taskToUpdate.start) {
-          // 期限内のタスクのみGoogleカレンダーから削除
           await deleteEventFromGoogleCalendar(taskToUpdate.googleEventId);
         }
         const response = await fetch(
@@ -1113,7 +1233,7 @@ function MainAppContent() {
               googleEventId:
                 taskToUpdate.start && taskToUpdate.googleEventId
                   ? taskToUpdate.googleEventId
-                  : null, // 期限内のタスクでGoogle Event IDがあれば維持、そうでなければnull
+                  : null,
               rescheduled: false,
             }),
           }
@@ -1141,7 +1261,7 @@ function MainAppContent() {
     concentration,
     completionTime
   ) => {
-    if (!googleUserInfo || !currentUserId) {
+    if (!googleUserInfo || !currentUserId || !aiModelData) { // aiModelData のチェックを追加
       setShowCompletionFeedbackModalForTask(null);
       return;
     }
@@ -1179,6 +1299,7 @@ function MainAppContent() {
             react_tasks: tasksForLearning,
             unavailableSlots: userDefinedUnavailableSlots,
             existingTasks: existingPlacedTasks,
+            aiModelData: aiModelData, // 現在のAIモデルデータを送信
           }),
         });
 
@@ -1189,6 +1310,9 @@ function MainAppContent() {
             type: "error",
           });
         } else {
+          const updatedModel = await feedbackResponse.json(); // 更新されたモデルデータを受け取る
+          setAiModelData(updatedModel); // モデルデータを更新
+          await saveAiModelToFirestore(updatedModel, userProfileType); // Firestoreに保存
           setMessage({
             text: "素晴らしい！フィードバックをAIが学習します。",
             type: "success",
@@ -1200,7 +1324,7 @@ function MainAppContent() {
           text: isOverdue
             ? "期限切れ課題を完了しました。"
             : "課題を完了しました（学習はスキップされました）。",
-          type: "info", // 期限切れの場合は情報、学習スキップの場合は情報
+          type: "info",
         });
       }
 
@@ -1270,9 +1394,6 @@ function MainAppContent() {
       setIsLoading(false);
     }
   };
-
-  // rescheduleTask 関数は削除しました。
-  // const rescheduleTask = async (taskId) => { ... };
 
   // --- Unavailable Slots Management ---
   const handleDayChange = (e) => {
@@ -1397,7 +1518,8 @@ function MainAppContent() {
     ? userDefinedUnavailableSlots
     : [];
 
-  if (!isAuthReady) {
+  // 認証とAIモデルのロードが完了するまでローディング表示
+  if (!isAuthReady || (currentUserId && !aiModelData && !showProfileTypeSelection)) {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-purple-100 to-indigo-200 flex flex-col items-center justify-center z-50">
         <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-white mb-6"></div>
@@ -1443,6 +1565,42 @@ function MainAppContent() {
           )}
         </header>
 
+        {/* プロファイルタイプ選択モーダル */}
+        {showProfileTypeSelection && (
+          <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md space-y-5 transform animate-fade-in-down">
+              <h2 className="text-2xl font-bold text-center text-indigo-700">
+                あなたのタイプを選択してください
+              </h2>
+              <p className="text-center text-gray-600">
+                AIがよりパーソナライズされた提案をするために、あなたの生活リズムに近いタイプを選んでください。
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button
+                  onClick={() => handleProfileTypeSelection("morning")}
+                  className="flex-1 flex flex-col items-center justify-center p-4 bg-blue-100 text-blue-800 rounded-lg shadow-md hover:bg-blue-200 transition transform hover:scale-105"
+                >
+                  <Sun className="h-10 w-10 mb-2 text-blue-600" />
+                  <span className="font-semibold text-lg">朝型人間</span>
+                  <span className="text-sm text-blue-700 text-center mt-1">
+                    午前中に集中しやすい
+                  </span>
+                </button>
+                <button
+                  onClick={() => handleProfileTypeSelection("night")}
+                  className="flex-1 flex flex-col items-center justify-center p-4 bg-purple-100 text-purple-800 rounded-lg shadow-md hover:bg-purple-200 transition transform hover:scale-105"
+                >
+                  <Moon className="h-10 w-10 mb-2 text-purple-600" />
+                  <span className="font-semibold text-lg">夜型人間</span>
+                  <span className="text-sm text-purple-700 text-center mt-1">
+                    午後に集中しやすい
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {!googleUserInfo && (
           <section className="bg-gray-50 rounded-lg p-4 shadow-md flex flex-col items-center">
             <button
@@ -1463,437 +1621,435 @@ function MainAppContent() {
           </section>
         )}
 
-        <CollapsibleSection
-          title={"新しい課題を追加"} // 編集機能削除のためタイトルを固定
-          icon={<Plus className="h-6 w-6 text-indigo-500" />} // 編集機能削除のためアイコンを固定
-          isOpen={showTaskInput}
-          setIsOpen={setShowTaskInput}
-        >
-          <div className="space-y-3">
-            <div>
-              <label
-                htmlFor="taskTitle"
-                className="block text-sm font-medium text-gray-700 mb-0.5"
-              >
-                課題タイトル <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="taskTitle"
-                ref={taskInputRef}
-                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                placeholder="例: 卒業論文を書く"
-                value={newTaskTitle}
-                onChange={(e) => setNewTaskTitle(e.target.value)}
-              />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="taskEstimate"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  見積もり時間 (分) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  id="taskEstimate"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  placeholder="例: 180"
-                  value={newTaskEstimate}
-                  onChange={(e) => setNewTaskEstimate(e.target.value)}
-                  min="0"
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="taskDeadline"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  希望の期限
-                </label>
-                <input
-                  type="date"
-                  id="taskDeadline"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  value={newTaskDeadline}
-                  onChange={(e) => setNewTaskDeadline(e.target.value)}
-                  min={new Date().toISOString().split("T")[0]}
-                />
-              </div>
-            </div>
-          </div>
-
-          {aiDateSuggestion ? (
-            <div className="mt-4 p-3 bg-indigo-50 rounded-lg space-y-3">
-              <p className="font-semibold text-center text-indigo-800">
-                AIの提案:{" "}
-                <span className="font-bold">
-                  {new Date(
-                    aiDateSuggestion.suggestedSlot.start
-                  ).toLocaleString("ja-JP", {
-                    month: "long",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "Asia/Tokyo",
-                  })}
-                </span>{" "}
-                でいかがですか？
-              </p>
-              <div className="flex justify-center gap-3">
-                <button
-                  onClick={confirmAndAddTask}
-                  className="flex items-center px-4 py-2 bg-green-500 text-white rounded-full shadow hover:bg-green-600 transition"
-                >
-                  <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
-                </button>
-                <button
-                  onClick={handleRejectAndResuggest}
-                  className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
-                >
-                  <RefreshCw className="h-4 w-4 mr-1.5" /> 別の時間を探す
-                </button>
-                <button
-                  onClick={() => setAiDateSuggestion(null)}
-                  className="flex items-center px-4 py-2 bg-gray-400 text-white rounded-full shadow hover:bg-gray-500 transition"
-                >
-                  <XCircle className="h-4 w-4 mr-1.5" /> キャンセル
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col sm:flex-row gap-3 mt-4">
-              <button
-                onClick={handleTaskSubmit}
-                disabled={isLoading}
-                className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50"
-              >
-                <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加{" "}
-                {/* 編集テキストを削除 */}
-              </button>
-              {/* 編集キャンセルボタンを削除 */}
-            </div>
-          )}
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          title="固定の予定を追加・管理"
-          icon={<Clock9 className="h-6 w-6 text-purple-500" />}
-          isOpen={showUnavailableSlots}
-          setIsOpen={setShowUnavailableSlots}
-        >
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-0.5">
-                曜日 <span className="text-red-500">*</span>
-              </label>
-              <div className="flex flex-wrap gap-2 sm:gap-3">
-                {Object.entries(DAY_OF_WEEK_MAP).map(([key, value]) => (
-                  <label key={key} className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      value={key}
-                      checked={selectedUnavailableDays.includes(key)}
-                      onChange={handleDayChange}
-                      className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
-                    />
-                    <span className="ml-1 text-sm text-gray-700">{value}</span>
-                  </label>
-                ))}
-                <label className="flex items-center cursor-pointer ml-4">
-                  <input
-                    type="checkbox"
-                    checked={selectedUnavailableDays.length === 7}
-                    onChange={handleSelectAllDays}
-                    className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
-                  />
-                  <span className="ml-1 text-sm text-gray-700 font-bold">
-                    毎日
-                  </span>
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="unavailableStartTime"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  開始時間 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="time"
-                  id="unavailableStartTime"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  value={newUnavailableStartTime}
-                  onChange={(e) => setNewUnavailableStartTime(e.target.value)}
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="unavailableEndTime"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  終了時間 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="time"
-                  id="unavailableEndTime"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  value={newUnavailableEndTime}
-                  onChange={(e) => setNewUnavailableEndTime(e.target.value)}
-                />
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="unavailableLabel"
-                className="block text-sm font-medium text-gray-700 mb-0.5"
-              >
-                ラベル (例: バイト, 就寝)
-              </label>
-              <input
-                type="text"
-                id="unavailableLabel"
-                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                placeholder="例: バイト"
-                value={newUnavailableLabel}
-                onChange={(e) => setNewUnavailableLabel(e.target.value)}
-              />
-            </div>
-            <button
-              onClick={handleAddUnavailableSlot}
-              className="w-full flex items-center justify-center px-5 py-2.5 bg-purple-600 text-white rounded-full shadow-md hover:bg-purple-700 transition transform hover:scale-105 disabled:opacity-50"
-              disabled={isLoading}
+        {/* AIモデルがロードされていない、またはタイプが選択されていない場合は、課題追加セクションなどを非表示にする */}
+        {aiModelData && (
+          <>
+            <CollapsibleSection
+              title={"新しい課題を追加"}
+              icon={<Plus className="h-6 w-6 text-indigo-500" />}
+              isOpen={showTaskInput}
+              setIsOpen={setShowTaskInput}
             >
-              <Plus className="mr-2 h-5 w-5" /> 固定の予定を追加
-            </button>
-
-            <h3 className="text-md font-semibold text-gray-700 mt-6 flex items-center">
-              <CalendarCheck className="h-5 w-5 mr-2" />
-              登録済みの固定の予定
-            </h3>
-            {displayUnavailableSlots.length === 0 ? (
-              <p className="text-gray-500 text-center py-2">
-                固定の予定はまだありません。
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {displayUnavailableSlots.map((slot) => (
-                  <li
-                    key={slot.id}
-                    className="flex items-center justify-between bg-purple-50 p-2.5 rounded-lg border border-purple-200"
+              <div className="space-y-3">
+                <div>
+                  <label
+                    htmlFor="taskTitle"
+                    className="block text-sm font-medium text-gray-700 mb-0.5"
                   >
-                    <div className="flex-1">
-                      <span className="font-semibold text-purple-800">
-                        {Array.isArray(slot.dayOfWeek) &&
-                        slot.dayOfWeek.length === 7
-                          ? "毎日"
-                          : Array.isArray(slot.dayOfWeek)
-                          ? slot.dayOfWeek
-                              .map((d) => DAY_OF_WEEK_MAP[parseInt(d)])
-                              .join(", ")
-                          : ""}
-                      </span>
-                      : {slot.startTime} - {slot.endTime} ({slot.label})
-                    </div>
-                    <button
-                      onClick={() => handleDeleteUnavailableSlot(slot.id)}
-                      className="ml-2 p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
-                      title="削除"
+                    課題タイトル <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    id="taskTitle"
+                    ref={taskInputRef}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                    placeholder="例: 卒業論文を書く"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor="taskEstimate"
+                      className="block text-sm font-medium text-gray-700 mb-0.5"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      見積もり時間 (分) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      id="taskEstimate"
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      placeholder="例: 180"
+                      value={newTaskEstimate}
+                      onChange={(e) => setNewTaskEstimate(e.target.value)}
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="taskDeadline"
+                      className="block text-sm font-medium text-gray-700 mb-0.5"
+                    >
+                      希望の期限
+                    </label>
+                    <input
+                      type="date"
+                      id="taskDeadline"
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                      value={newTaskDeadline}
+                      onChange={(e) => setNewTaskDeadline(e.target.value)}
+                      min={new Date().toISOString().split("T")[0]}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {aiDateSuggestion ? (
+                <div className="mt-4 p-3 bg-indigo-50 rounded-lg space-y-3">
+                  <p className="font-semibold text-center text-indigo-800">
+                    AIの提案:{" "}
+                    <span className="font-bold">
+                      {new Date(
+                        aiDateSuggestion.suggestedSlot.start
+                      ).toLocaleString("ja-JP", {
+                        month: "long",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        timeZone: "Asia/Tokyo",
+                      })}
+                    </span>{" "}
+                    でいかがですか？
+                  </p>
+                  <div className="flex justify-center gap-3">
+                    <button
+                      onClick={confirmAndAddTask}
+                      className="flex items-center px-4 py-2 bg-green-500 text-white rounded-full shadow hover:bg-green-600 transition"
+                    >
+                      <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          title="あなたの課題リスト"
-          icon={<Zap className="h-6 w-6 text-green-500" />}
-          isOpen={showTaskList}
-          setIsOpen={setShowTaskList}
-        >
-          {visibleTasks.length === 0 ? (
-            googleUserInfo ? (
-              <p className="text-gray-500 text-center py-4">
-                表示する課題がありません。
-              </p>
-            ) : (
-              <p className="text-gray-500 text-center py-4">
-                課題を保存・表示するにはGoogleログインが必要です。
-              </p>
-            )
-          ) : (
-            <ul className="space-y-3">
-              {visibleTasks.map((task) => {
-                // 期限切れかどうかを判定 (現在時刻を考慮)
-                const now = new Date();
-                const isOverdue =
-                  task.end && now > new Date(task.end) && !task.completed;
-
-                return (
-                  <li
-                    key={task.id}
-                    className={`p-3 rounded-lg shadow-sm border-l-4 transition-all ${getTaskCardBgColor(
-                      task
-                    )}`}
+                    <button
+                      onClick={handleRejectAndResuggest}
+                      className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1.5" /> 別の時間を探す
+                    </button>
+                    <button
+                      onClick={() => setAiDateSuggestion(null)}
+                      className="flex items-center px-4 py-2 bg-gray-400 text-white rounded-full shadow hover:bg-gray-500 transition"
+                    >
+                      <XCircle className="h-4 w-4 mr-1.5" /> キャンセル
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                  <button
+                    onClick={handleTaskSubmit}
+                    disabled={isLoading}
+                    className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1 min-w-0">
-                        <h3
-                          className={`text-md font-semibold truncate ${
-                            task.completed
-                              ? "line-through text-gray-500"
-                              : "text-gray-800"
-                          }`}
-                        >
-                          {task.title}
-                          {isOverdue && (
-                            <span className="ml-2 text-red-600">
-                              (期限切れ)
-                            </span>
-                          )}{" "}
-                          {/* 期限切れ表示を追加 */}
-                        </h3>
-                        <div className="flex flex-wrap items-center text-xs text-gray-600 mt-0.5 gap-x-2">
-                          {task.estimatedTime > 0 && !task.completed && (
-                            <span className="flex items-center">
-                              <Clock className="h-3.5 w-3.5 mr-0.5" />{" "}
-                              {task.estimatedTime} 分
-                            </span>
-                          )}
-                          {task.start && !task.completed && (
-                            <span className={`flex items-center font-semibold`}>
-                              <Calendar className="h-3.5 w-3.5 mr-0.5" />{" "}
-                              提案日時: {/* テキストを変更 */}
-                              {new Date(task.start).toLocaleString("ja-JP", {
-                                month: "long",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                timeZone: "Asia/Tokyo",
-                              })}
-                            </span>
-                          )}
-                          {/* 期限切れタスクの「期限切れ」表示は上記のh3タグ内に移動し、再入力項目は削除 */}
-                          {task.rescheduled && !task.start && (
-                            <span className="text-blue-600 font-semibold">
-                              再入力待ち
-                            </span>
-                          )}
+                    <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加{" "}
+                  </button>
+                </div>
+              )}
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="固定の予定を追加・管理"
+              icon={<Clock9 className="h-6 w-6 text-purple-500" />}
+              isOpen={showUnavailableSlots}
+              setIsOpen={setShowUnavailableSlots}
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-0.5">
+                    曜日 <span className="text-red-500">*</span>
+                  </label>
+                  <div className="flex flex-wrap gap-2 sm:gap-3">
+                    {Object.entries(DAY_OF_WEEK_MAP).map(([key, value]) => (
+                      <label key={key} className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          value={key}
+                          checked={selectedUnavailableDays.includes(key)}
+                          onChange={handleDayChange}
+                          className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
+                        />
+                        <span className="ml-1 text-sm text-gray-700">{value}</span>
+                      </label>
+                    ))}
+                    <label className="flex items-center cursor-pointer ml-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedUnavailableDays.length === 7}
+                        onChange={handleSelectAllDays}
+                        className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
+                      />
+                      <span className="ml-1 text-sm text-gray-700 font-bold">
+                        毎日
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor="unavailableStartTime"
+                      className="block text-sm font-medium text-gray-700 mb-0.5"
+                    >
+                      開始時間 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="time"
+                      id="unavailableStartTime"
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                      value={newUnavailableStartTime}
+                      onChange={(e) => setNewUnavailableStartTime(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="unavailableEndTime"
+                      className="block text-sm font-medium text-gray-700 mb-0.5"
+                    >
+                      終了時間 <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="time"
+                      id="unavailableEndTime"
+                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                      value={newUnavailableEndTime}
+                      onChange={(e) => setNewUnavailableEndTime(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label
+                    htmlFor="unavailableLabel"
+                    className="block text-sm font-medium text-gray-700 mb-0.5"
+                  >
+                    ラベル (例: バイト, 就寝)
+                  </label>
+                  <input
+                    type="text"
+                    id="unavailableLabel"
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+                    placeholder="例: バイト"
+                    value={newUnavailableLabel}
+                    onChange={(e) => setNewUnavailableLabel(e.target.value)}
+                  />
+                </div>
+                <button
+                  onClick={handleAddUnavailableSlot}
+                  className="w-full flex items-center justify-center px-5 py-2.5 bg-purple-600 text-white rounded-full shadow-md hover:bg-purple-700 transition transform hover:scale-105 disabled:opacity-50"
+                  disabled={isLoading}
+                >
+                  <Plus className="mr-2 h-5 w-5" /> 固定の予定を追加
+                </button>
+
+                <h3 className="text-md font-semibold text-gray-700 mt-6 flex items-center">
+                  <CalendarCheck className="h-5 w-5 mr-2" />
+                  登録済みの固定の予定
+                </h3>
+                {displayUnavailableSlots.length === 0 ? (
+                  <p className="text-gray-500 text-center py-2">
+                    固定の予定はまだありません。
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {displayUnavailableSlots.map((slot) => (
+                      <li
+                        key={slot.id}
+                        className="flex items-center justify-between bg-purple-50 p-2.5 rounded-lg border border-purple-200"
+                      >
+                        <div className="flex-1">
+                          <span className="font-semibold text-purple-800">
+                            {Array.isArray(slot.dayOfWeek) &&
+                            slot.dayOfWeek.length === 7
+                              ? "毎日"
+                              : Array.isArray(slot.dayOfWeek)
+                              ? slot.dayOfWeek
+                                  .map((d) => DAY_OF_WEEK_MAP[parseInt(d)])
+                                  .join(", ")
+                              : ""}
+                          </span>
+                          : {slot.startTime} - {slot.endTime} ({slot.label})
                         </div>
-                      </div>
-                      <div className="flex items-center space-x-1.5 ml-2">
-                        {!task.completed ? ( // 未完了の場合のみボタンを表示
-                          <>
-                            {isOverdue && task.start ? ( // 期限切れかつスケジュールされたタスクの場合のみスキップボタン
-                              <button
-                                onClick={() => handleSkipTask(task.id)}
-                                className="p-1.5 rounded-full bg-gray-500 hover:bg-gray-600 text-white shadow-sm transition"
-                                title="スキップ"
-                              >
-                                <Rewind className="h-4 w-4" />
-                              </button>
-                            ) : null}
-                            <button
-                              onClick={() =>
-                                toggleTaskCompletion(task.id, task.completed)
-                              }
-                              className={`p-1.5 rounded-full transition shadow-sm ${
-                                isOverdue
-                                  ? "bg-purple-500 hover:bg-purple-600"
-                                  : "bg-green-500 hover:bg-green-600" // 期限切れは紫色、期限内は緑色
-                              } text-white`}
-                              title={
-                                isOverdue
-                                  ? "完了にする (期限切れ)"
-                                  : "完了にする"
-                              }
-                            >
-                              <Check className="h-4 w-4" />
-                            </button>
-                          </>
-                        ) : (
-                          // 完了済みの場合は未完了に戻すボタンのみ
-                          <button
-                            onClick={() =>
-                              toggleTaskCompletion(task.id, task.completed)
-                            }
-                            className="p-1.5 rounded-full bg-gray-400 hover:bg-gray-500 text-white shadow-sm transition"
-                            title="未完了に戻す"
-                          >
-                            <Check className="h-4 w-4" />
-                          </button>
-                        )}
-                        {/* 編集ボタンは削除 */}
                         <button
-                          onClick={() => deleteTask(task.id)}
-                          className="p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
+                          onClick={() => handleDeleteUnavailableSlot(slot.id)}
+                          className="ml-2 p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
                           title="削除"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
-                      </div>
-                    </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CollapsibleSection>
 
-                    {/* 期限切れの再入力項目は完全に削除 */}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </CollapsibleSection>
+            <CollapsibleSection
+              title="あなたの課題リスト"
+              icon={<Zap className="h-6 w-6 text-green-500" />}
+              isOpen={showTaskList}
+              setIsOpen={setShowTaskList}
+            >
+              {visibleTasks.length === 0 ? (
+                googleUserInfo ? (
+                  <p className="text-gray-500 text-center py-4">
+                    表示する課題がありません。
+                  </p>
+                ) : (
+                  <p className="text-gray-500 text-center py-4">
+                    課題を保存・表示するにはGoogleログインが必要です。
+                  </p>
+                )
+              ) : (
+                <ul className="space-y-3">
+                  {visibleTasks.map((task) => {
+                    // 期限切れかどうかを判定 (現在時刻を考慮)
+                    const now = new Date();
+                    const isOverdue =
+                      task.end && now > new Date(task.end) && !task.completed;
 
-        <CollapsibleSection
-          title="あなたの活動記録"
-          icon={<BarChart className="h-6 w-6 text-blue-500" />}
-          isOpen={showStats}
-          setIsOpen={setShowStats}
-        >
-          <div className="space-y-4 p-2">
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm font-medium text-gray-700">
-                  過去7日間の完了タスク
-                </span>
-                <span className="font-bold text-lg text-blue-600">
-                  {taskStats.week}件
-                </span>
+                    return (
+                      <li
+                        key={task.id}
+                        className={`p-3 rounded-lg shadow-sm border-l-4 transition-all ${getTaskCardBgColor(
+                          task
+                        )}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1 min-w-0">
+                            <h3
+                              className={`text-md font-semibold truncate ${
+                                task.completed
+                                  ? "line-through text-gray-500"
+                                  : "text-gray-800"
+                              }`}
+                            >
+                              {task.title}
+                              {isOverdue && (
+                                <span className="ml-2 text-red-600">
+                                  (期限切れ)
+                                </span>
+                              )}{" "}
+                            </h3>
+                            <div className="flex flex-wrap items-center text-xs text-gray-600 mt-0.5 gap-x-2">
+                              {task.estimatedTime > 0 && !task.completed && (
+                                <span className="flex items-center">
+                                  <Clock className="h-3.5 w-3.5 mr-0.5" />{" "}
+                                  {task.estimatedTime} 分
+                                </span>
+                              )}
+                              {task.start && !task.completed && (
+                                <span className={`flex items-center font-semibold`}>
+                                  <Calendar className="h-3.5 w-3.5 mr-0.5" />{" "}
+                                  提案日時:{" "}
+                                  {new Date(task.start).toLocaleString("ja-JP", {
+                                    month: "long",
+                                    day: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                    timeZone: "Asia/Tokyo",
+                                  })}
+                                </span>
+                              )}
+                              {task.rescheduled && !task.start && (
+                                <span className="text-blue-600 font-semibold">
+                                  再入力待ち
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-1.5 ml-2">
+                            {!task.completed ? ( // 未完了の場合のみボタンを表示
+                              <>
+                                {isOverdue && task.start ? ( // 期限切れかつスケジュールされたタスクの場合のみスキップボタン
+                                  <button
+                                    onClick={() => handleSkipTask(task.id)}
+                                    className="p-1.5 rounded-full bg-gray-500 hover:bg-gray-600 text-white shadow-sm transition"
+                                    title="スキップ"
+                                  >
+                                    <Rewind className="h-4 w-4" />
+                                  </button>
+                                ) : null}
+                                <button
+                                  onClick={() =>
+                                    toggleTaskCompletion(task.id, task.completed)
+                                  }
+                                  className={`p-1.5 rounded-full transition shadow-sm ${
+                                    isOverdue
+                                      ? "bg-purple-500 hover:bg-purple-600"
+                                      : "bg-green-500 hover:bg-green-600" // 期限切れは紫色、期限内は緑色
+                                  } text-white`}
+                                  title={
+                                    isOverdue
+                                      ? "完了にする (期限切れ)"
+                                      : "完了にする"
+                                  }
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                              </>
+                            ) : (
+                              // 完了済みの場合は未完了に戻すボタンのみ
+                              <button
+                                onClick={() =>
+                                  toggleTaskCompletion(task.id, task.completed)
+                                }
+                                className="p-1.5 rounded-full bg-gray-400 hover:bg-gray-500 text-white shadow-sm transition"
+                                title="未完了に戻す"
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => deleteTask(task.id)}
+                              className="p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
+                              title="削除"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="あなたの活動記録"
+              icon={<BarChart className="h-6 w-6 text-blue-500" />}
+              isOpen={showStats}
+              setIsOpen={setShowStats}
+            >
+              <div className="space-y-4 p-2">
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="sm:text-sm font-medium text-gray-700">
+                      過去7日間の完了タスク
+                    </span>
+                    <span className="font-bold text-lg text-blue-600">
+                      {taskStats.week}件
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{
+                        width: `${Math.min(100, (taskStats.week / 7) * 100)}%`,
+                      }}
+                    ></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="sm:text-sm font-medium text-gray-700">
+                      過去30日間の完了タスク
+                    </span>
+                    <span className="font-bold text-lg text-blue-600">
+                      {taskStats.month}件
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-blue-600 h-2.5 rounded-full"
+                      style={{
+                        width: `${Math.min(100, (taskStats.month / 20) * 100)}%`,
+                      }}
+                    ></div>
+                  </div>
+                </div>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full"
-                  style={{
-                    width: `${Math.min(100, (taskStats.week / 7) * 100)}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm font-medium text-gray-700">
-                  過去30日間の完了タスク
-                </span>
-                <span className="font-bold text-lg text-blue-600">
-                  {taskStats.month}件
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full"
-                  style={{
-                    width: `${Math.min(100, (taskStats.month / 20) * 100)}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-          </div>
-        </CollapsibleSection>
+            </CollapsibleSection>
+          </>
+        )} {/* End of conditional rendering for main content */}
 
         <footer className="text-center text-gray-500 text-xs pt-6 border-t border-gray-200">
           <p>&copy; 2024 AI課題プランナー</p>
