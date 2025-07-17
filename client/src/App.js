@@ -6,12 +6,7 @@ import {
   signInWithCustomToken,
   onAuthStateChanged,
 } from "firebase/auth";
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc,
-} from "firebase/firestore"; // Firestore imports
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore"; // Firestore imports
 
 // Tailwind CSS is assumed to be available in the environment.
 // For icons, we'll use Lucide React icons.
@@ -224,7 +219,8 @@ function MainAppContent() {
   // New states for user profile type and AI model data
   const [userProfileType, setUserProfileType] = useState(null); // 'morning', 'night', or null (not selected)
   const [aiModelData, setAiModelData] = useState(null); // Stores the full AI model data (concentration_map, q_table)
-  const [showProfileTypeSelection, setShowProfileTypeSelection] = useState(false);
+  const [showProfileTypeSelection, setShowProfileTypeSelection] =
+    useState(false);
 
   const [tasks, setTasks] = useState([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -397,7 +393,9 @@ function MainAppContent() {
   // --- Save AI Model Data to Firestore ---
   const saveAiModelToFirestore = async (modelData, userType) => {
     if (!db || !currentUserId) {
-      console.warn("Firestore not ready or userId not available for saving AI model.");
+      console.warn(
+        "Firestore not ready or userId not available for saving AI model."
+      );
       return;
     }
     try {
@@ -425,7 +423,7 @@ function MainAppContent() {
         type === "morning"
           ? "morning_person_initial_model.json"
           : "night_owl_initial_model.json";
-      
+
       // JSONファイルを直接fetchする (public/ 配下にあることを想定)
       const response = await fetch(`/${modelFileName}`);
       if (!response.ok) {
@@ -437,7 +435,12 @@ function MainAppContent() {
       setUserProfileType(type);
       await saveAiModelToFirestore(initialModelData, type); // 初期モデルをFirestoreに保存
       setShowProfileTypeSelection(false);
-      setMessage({ text: `あなたのタイプを「${type === 'morning' ? '朝型' : '夜型'}」に設定しました。`, type: "success" });
+      setMessage({
+        text: `あなたのタイプを「${
+          type === "morning" ? "朝型" : "夜型"
+        }」に設定しました。`,
+        type: "success",
+      });
     } catch (error) {
       console.error("Error setting profile type:", error);
       setMessage({
@@ -885,7 +888,8 @@ function MainAppContent() {
       });
       return;
     }
-    if (!aiModelData) { // AIモデルデータがロードされているか確認
+    if (!aiModelData) {
+      // AIモデルデータがロードされているか確認
       setMessage({
         text: "AIモデルのロードを待っています。しばらくお待ちください。",
         type: "info",
@@ -942,7 +946,10 @@ function MainAppContent() {
       // AIモデルデータが返された場合は更新
       if (suggestionResponse.aiModelData) {
         setAiModelData(suggestionResponse.aiModelData);
-        await saveAiModelToFirestore(suggestionResponse.aiModelData, userProfileType); // Firestoreに保存
+        await saveAiModelToFirestore(
+          suggestionResponse.aiModelData,
+          userProfileType
+        ); // Firestoreに保存
       }
       setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
     } catch (error) {
@@ -959,7 +966,13 @@ function MainAppContent() {
   };
 
   const confirmAndAddTask = async () => {
-    if (!googleUserInfo || !currentUserId || !aiDateSuggestion || !aiModelData) { // aiModelData のチェックを追加
+    if (
+      !googleUserInfo ||
+      !currentUserId ||
+      !aiDateSuggestion ||
+      !aiModelData
+    ) {
+      // aiModelData のチェックを追加
       setMessage({
         text: "必要な情報が揃っていません。",
         type: "error",
@@ -1047,7 +1060,8 @@ function MainAppContent() {
       });
       return;
     }
-    if (!aiModelData) { // AIモデルデータがロードされているか確認
+    if (!aiModelData) {
+      // AIモデルデータがロードされているか確認
       setMessage({
         text: "AIモデルのロードを待っています。しばらくお待ちください。",
         type: "info",
@@ -1261,7 +1275,8 @@ function MainAppContent() {
     concentration,
     completionTime
   ) => {
-    if (!googleUserInfo || !currentUserId || !aiModelData) { // aiModelData のチェックを追加
+    if (!googleUserInfo || !currentUserId || !aiModelData) {
+      // aiModelData のチェックを追加
       setShowCompletionFeedbackModalForTask(null);
       return;
     }
@@ -1519,7 +1534,10 @@ function MainAppContent() {
     : [];
 
   // 認証とAIモデルのロードが完了するまでローディング表示
-  if (!isAuthReady || (currentUserId && !aiModelData && !showProfileTypeSelection)) {
+  if (
+    !isAuthReady ||
+    (currentUserId && !aiModelData && !showProfileTypeSelection)
+  ) {
     return (
       <div className="fixed inset-0 bg-gradient-to-br from-purple-100 to-indigo-200 flex flex-col items-center justify-center z-50">
         <div className="animate-spin rounded-full h-20 w-20 border-t-4 border-b-4 border-white mb-6"></div>
@@ -1564,7 +1582,6 @@ function MainAppContent() {
             </div>
           )}
         </header>
-
         {/* プロファイルタイプ選択モーダル */}
         {showProfileTypeSelection && (
           <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center z-50 p-4">
@@ -1600,7 +1617,6 @@ function MainAppContent() {
             </div>
           </div>
         )}
-
         {!googleUserInfo && (
           <section className="bg-gray-50 rounded-lg p-4 shadow-md flex flex-col items-center">
             <button
@@ -1620,7 +1636,6 @@ function MainAppContent() {
             </p>
           </section>
         )}
-
         {/* AIモデルがロードされていない、またはタイプが選択されていない場合は、課題追加セクションなどを非表示にする */}
         {aiModelData && (
           <>
@@ -1730,7 +1745,8 @@ function MainAppContent() {
                     disabled={isLoading}
                     className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50"
                   >
-                    <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加{" "}
+                    <Sparkles className="mr-2 h-5 w-5" />{" "}
+                    AIが日時を入れて課題追加{" "}
                   </button>
                 </div>
               )}
@@ -1749,7 +1765,10 @@ function MainAppContent() {
                   </label>
                   <div className="flex flex-wrap gap-2 sm:gap-3">
                     {Object.entries(DAY_OF_WEEK_MAP).map(([key, value]) => (
-                      <label key={key} className="flex items-center cursor-pointer">
+                      <label
+                        key={key}
+                        className="flex items-center cursor-pointer"
+                      >
                         <input
                           type="checkbox"
                           value={key}
@@ -1757,7 +1776,9 @@ function MainAppContent() {
                           onChange={handleDayChange}
                           className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
                         />
-                        <span className="ml-1 text-sm text-gray-700">{value}</span>
+                        <span className="ml-1 text-sm text-gray-700">
+                          {value}
+                        </span>
                       </label>
                     ))}
                     <label className="flex items-center cursor-pointer ml-4">
@@ -1786,7 +1807,9 @@ function MainAppContent() {
                       id="unavailableStartTime"
                       className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
                       value={newUnavailableStartTime}
-                      onChange={(e) => setNewUnavailableStartTime(e.target.value)}
+                      onChange={(e) =>
+                        setNewUnavailableStartTime(e.target.value)
+                      }
                     />
                   </div>
                   <div>
@@ -1926,16 +1949,21 @@ function MainAppContent() {
                                 </span>
                               )}
                               {task.start && !task.completed && (
-                                <span className={`flex items-center font-semibold`}>
+                                <span
+                                  className={`flex items-center font-semibold`}
+                                >
                                   <Calendar className="h-3.5 w-3.5 mr-0.5" />{" "}
                                   提案日時:{" "}
-                                  {new Date(task.start).toLocaleString("ja-JP", {
-                                    month: "long",
-                                    day: "numeric",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                    timeZone: "Asia/Tokyo",
-                                  })}
+                                  {new Date(task.start).toLocaleString(
+                                    "ja-JP",
+                                    {
+                                      month: "long",
+                                      day: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      timeZone: "Asia/Tokyo",
+                                    }
+                                  )}
                                 </span>
                               )}
                               {task.rescheduled && !task.start && (
@@ -1959,7 +1987,10 @@ function MainAppContent() {
                                 ) : null}
                                 <button
                                   onClick={() =>
-                                    toggleTaskCompletion(task.id, task.completed)
+                                    toggleTaskCompletion(
+                                      task.id,
+                                      task.completed
+                                    )
                                   }
                                   className={`p-1.5 rounded-full transition shadow-sm ${
                                     isOverdue
@@ -2041,7 +2072,10 @@ function MainAppContent() {
                     <div
                       className="bg-blue-600 h-2.5 rounded-full"
                       style={{
-                        width: `${Math.min(100, (taskStats.month / 20) * 100)}%`,
+                        width: `${Math.min(
+                          100,
+                          (taskStats.month / 20) * 100
+                        )}%`,
                       }}
                     ></div>
                   </div>
@@ -2049,8 +2083,8 @@ function MainAppContent() {
               </div>
             </CollapsibleSection>
           </>
-        )} {/* End of conditional rendering for main content */}
-
+        )}{" "}
+        {/* End of conditional rendering for main content */}
         <footer className="text-center text-gray-500 text-xs pt-6 border-t border-gray-200">
           <p>&copy; 2024 AI課題プランナー</p>
         </footer>
