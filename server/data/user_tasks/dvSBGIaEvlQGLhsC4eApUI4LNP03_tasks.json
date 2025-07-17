@@ -50,11 +50,11 @@
     "deadline": "2025-06-28",
     "start": "2025-06-28T13:00:00.000Z",
     "end": "2025-06-28T13:30:00.000Z",
-    "completed": false,
+    "completed": true,
     "createdAt": "2025-06-28T09:39:29.790Z",
-    "completedAt": null,
-    "concentrationLevel": null,
-    "hidden": false,
+    "completedAt": "2025-07-17T06:48:57.967Z",
+    "concentrationLevel": 0,
+    "hidden": true,
     "googleEventId": "urqp3rul35lvvc8pj32rvf08is",
     "rescheduled": false,
     "id": "ccb52be1-7a7d-4c17-a01e-7d712c22f01a"
@@ -65,11 +65,11 @@
     "deadline": "2025-06-28",
     "start": "2025-06-28T14:00:00.000Z",
     "end": "2025-06-28T14:30:00.000Z",
-    "completed": false,
+    "completed": true,
     "createdAt": "2025-06-28T09:52:56.346Z",
-    "completedAt": null,
-    "concentrationLevel": null,
-    "hidden": false,
+    "completedAt": "2025-07-17T06:49:00.000Z",
+    "concentrationLevel": 5,
+    "hidden": true,
     "googleEventId": "8o135b6n1qdpoo2je5v1svpmrs",
     "rescheduled": false,
     "id": "336a2a1e-c469-4b89-953a-d4fe86ae6d2e"
@@ -103,5 +103,20 @@
     "googleEventId": "mdf8ha8roojlhi9u52q2vdnnug",
     "rescheduled": false,
     "id": "027818cf-406e-4a9e-866b-db644403da3f"
+  },
+  {
+    "title": "111",
+    "estimatedTime": 180,
+    "deadline": "2025-07-17",
+    "start": "2025-07-17T16:48:50.794Z",
+    "end": "2025-07-17T19:48:50.794Z",
+    "completed": false,
+    "createdAt": "2025-07-17T06:48:51.051Z",
+    "completedAt": null,
+    "concentrationLevel": null,
+    "hidden": false,
+    "googleEventId": "1cpl3hmtuvdnk13813j5jjesf4",
+    "rescheduled": false,
+    "id": "43e8956c-b678-49e1-bb52-d129f5056c85"
   }
 ]

@@ -174,11 +174,10 @@ def suggest_slot_endpoint():
         return jsonify({"error": "提案対象のタスクが見つかりませんでした"}), 400
     
     target_task = tasks[-1]
-    other_tasks = tasks[:-1]
 
     # ★★★ ここからが修正箇所 ★★★
     # suggest_best_slotは {"suggestion": ..., "reason": ...} という辞書を返す
-    result = suggest_best_slot(target_task, other_tasks, ng_zones, ai_model)
+    result = suggest_best_slot(target_task, ng_zones, ai_model)
     
     # 成功した場合、'suggestion'キーの中身だけを取り出して返す
     if result and result.get("suggestion"):
