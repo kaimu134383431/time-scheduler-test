@@ -3,3 +3,4 @@ __pycache__/
 client/node_modules/
 client/build/
 server/data/
+client/.env.local
