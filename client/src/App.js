@@ -20,18 +20,15 @@ import {
   Zap,
   ChevronDown,
   ChevronUp,
-  // Edit3, // 編集ボタンを削除するためコメントアウト
   Trash2,
-  // RotateCcw, // 再入力機能を削除するためコメントアウト
-  // Repeat, // 再入力機能を削除するためコメントアウト
-  BarChart, // For stats
+  // BarChart, // For stats - REMOVED
   Star, // For ratings
   ThumbsUp,
   RefreshCw,
   XCircle,
-  Clock9, // For fixed unavailability
-  CalendarCheck, // For fixed unavailability list
   Rewind, // スキップアイコン用
+  Sun, // 朝型アイコン
+  Moon, // 夜型アイコン
 } from "lucide-react";
 
 // Firebase configuration placeholder - This setting will be overwritten by __firebase_config provided by the Canvas environment.
@@ -56,17 +53,6 @@ const initialAuthToken =
 // It is directly written here for testing purposes, but caution is advised in production environments.
 const GOOGLE_CLIENT_ID =
   "658537863941-7faa9ifaqso60b9kks1m6l4h4tgmt7up.apps.googleusercontent.com";
-
-// Day of the week mapping
-const DAY_OF_WEEK_MAP = {
-  0: "日",
-  1: "月",
-  2: "火",
-  3: "水",
-  4: "木",
-  5: "金",
-  6: "土",
-};
 
 // FlaskサーバーのURL
 const FLASK_SERVER_URL = "https://2p9ty2-5001.csb.app/";
@@ -210,21 +196,15 @@ const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
 };
 
 function MainAppContent() {
-  // const [db, setDb] = useState(null); // Firestore db state removed
   const [auth, setAuth] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const authCheckCompletedRef = useRef(false); // Add a new ref
+  const authCheckCompletedRef = useRef(false);
 
   const [tasks, setTasks] = useState([]);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskEstimate, setNewTaskEstimate] = useState("");
   const [newTaskDeadline, setNewTaskDeadline] = useState("");
-  // const [editingTask, setEditingTask] = useState(null); // 編集機能削除のためコメントアウト
-
-  // const [rescheduleInputs, setRescheduleInputs] = useState({}); // 再入力機能削除のためコメントアウト
-
-  const [taskStats, setTaskStats] = useState({ week: 0, month: 0 });
 
   const [message, setMessage] = useState({ text: "", type: "info" });
   const [aiDateSuggestion, setAiDateSuggestion] = useState(null);
@@ -234,19 +214,11 @@ function MainAppContent() {
   const [googleAccessToken, setGoogleAccessToken] = useState("");
   const [googleTokenClient, setGoogleTokenClient] = useState(null);
 
-  // New state: user-defined fixed unavailability
-  const [userDefinedUnavailableSlots, setUserDefinedUnavailableSlots] =
-    useState([]);
-  const [selectedUnavailableDays, setSelectedUnavailableDays] = useState([]); // For multiple selection
-  const [newUnavailableStartTime, setNewUnavailableStartTime] =
-    useState("09:00");
-  const [newUnavailableEndTime, setNewUnavailableEndTime] = useState("17:00");
-  const [newUnavailableLabel, setNewUnavailableLabel] = useState("");
-
   const [showTaskInput, setShowTaskInput] = useState(true);
   const [showTaskList, setShowTaskList] = useState(true);
-  const [showStats, setShowStats] = useState(true);
-  const [showUnavailableSlots, setShowUnavailableSlots] = useState(false); // Fixed unavailability section
+
+  // New state for user preference (morning/night person)
+  const [userPreference, setUserPreference] = useState(null); // 'morning' or 'night'
 
   // State to control the display of the modal for entering concentration level and completion time
   const [
@@ -450,43 +422,36 @@ function MainAppContent() {
     }
   }, [currentUserId, googleUserInfo]);
 
-  // --- Fetch Unavailable Slots from Flask Backend ---
-  const fetchUnavailableSlots = async () => {
-    if (!currentUserId || !googleUserInfo) {
-      setUserDefinedUnavailableSlots([]);
+  // --- Fetch User Preference from Flask Backend ---
+  const fetchUserPreference = async () => {
+    if (!currentUserId) {
+      setUserPreference(null);
       return;
     }
-    setIsLoading(true);
     try {
       const response = await fetch(
-        `${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}`
+        `${FLASK_SERVER_URL}/user-preference/${currentUserId}`
       );
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(
-          errorData.error || "固定の予定リストの取得に失敗しました"
-        );
+      if (response.ok) {
+        const data = await response.json();
+        setUserPreference(data.preferred_model || null);
+      } else {
+        // Preference might not be set yet, which is fine.
+        console.warn("User preference not found or error fetching.");
+        setUserPreference(null);
       }
-      const fetchedSlots = await response.json();
-      setUserDefinedUnavailableSlots(fetchedSlots);
     } catch (error) {
-      console.error("Error fetching unavailable slots:", error);
-      setMessage({
-        text: `固定の予定の取得中にエラーが発生しました: ${error.message}`,
-        type: "error",
-      });
-    } finally {
-      setIsLoading(false);
+      console.error("Error fetching user preference:", error);
+      setUserPreference(null);
     }
   };
 
+  // Fetch user preference when user logs in
   useEffect(() => {
-    if (currentUserId && googleUserInfo) {
-      fetchUnavailableSlots();
-    } else {
-      setUserDefinedUnavailableSlots([]);
+    if (currentUserId) {
+      fetchUserPreference();
     }
-  }, [currentUserId, googleUserInfo]);
+  }, [currentUserId]);
 
   // --- Google Login & Calendar ---
   const handleGoogleLoginClick = () => {
@@ -702,6 +667,13 @@ function MainAppContent() {
 
   const handleRejectAndResuggest = async () => {
     if (!currentUserId || !aiDateSuggestion) return;
+    if (!userPreference) {
+      setMessage({
+        text: "朝型/夜型の設定を選択してください。",
+        type: "error",
+      });
+      return;
+    }
 
     setIsLoading(true);
     setMessage({
@@ -738,8 +710,8 @@ function MainAppContent() {
             startTime: aiDateSuggestion.suggestedSlot.start.toISOString(),
             endTime: aiDateSuggestion.suggestedSlot.end.toISOString(),
             react_tasks: allUncompletedTasks,
-            unavailableSlots: userDefinedUnavailableSlots,
             existingTasks: existingPlacedTasks,
+            preferredModel: userPreference, // Pass user preference
           }),
         }
       );
@@ -780,6 +752,13 @@ function MainAppContent() {
       });
       return;
     }
+    if (!userPreference) {
+      setMessage({
+        text: "朝型/夜型の設定を選択してください。",
+        type: "error",
+      });
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -806,9 +785,9 @@ function MainAppContent() {
             deadline: newTaskDeadline || null,
           },
           // AIが考慮するべき他の情報
-          unavailableSlots: userDefinedUnavailableSlots,
           existingTasks: existingPlacedTasks, // NGゾーン用
           uncompletedTasks: uncompletedAndUnscheduledTasks, // Qテーブル評価用
+          preferredModel: userPreference, // Pass user preference
         }),
       });
 
@@ -929,6 +908,13 @@ function MainAppContent() {
       });
       return;
     }
+    if (!userPreference) {
+      setMessage({
+        text: "朝型/夜型の設定を選択してください。",
+        type: "error",
+      });
+      return;
+    }
 
     // AI提案モード
     // editingTask ステートは存在しないため、常にAI提案モードの条件で判定
@@ -972,6 +958,7 @@ function MainAppContent() {
           body: JSON.stringify({
             userId: currentUserId,
             task: taskData,
+            preferredModel: userPreference, // Pass user preference
           }),
         });
         if (!response.ok) {
@@ -1023,6 +1010,7 @@ function MainAppContent() {
             taskId: taskId, // AI側での参照用
             startTime: taskToSkip.start,
             endTime: taskToSkip.end,
+            preferredModel: userPreference, // Pass user preference
           }),
         });
 
@@ -1145,6 +1133,14 @@ function MainAppContent() {
       setShowCompletionFeedbackModalForTask(null);
       return;
     }
+    if (!userPreference) {
+      setMessage({
+        text: "朝型/夜型の設定を選択してください。",
+        type: "error",
+      });
+      setShowCompletionFeedbackModalForTask(null);
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -1177,8 +1173,8 @@ function MainAppContent() {
             endTime: taskToComplete.end,
             concentrationRating: concentration,
             react_tasks: tasksForLearning,
-            unavailableSlots: userDefinedUnavailableSlots,
             existingTasks: existingPlacedTasks,
+            preferredModel: userPreference, // Pass user preference
           }),
         });
 
@@ -1271,100 +1267,34 @@ function MainAppContent() {
     }
   };
 
-  // rescheduleTask 関数は削除しました。
-  // const rescheduleTask = async (taskId) => { ... };
-
-  // --- Unavailable Slots Management ---
-  const handleDayChange = (e) => {
-    const day = e.target.value;
-    setSelectedUnavailableDays((prev) =>
-      e.target.checked
-        ? [...prev, day].sort()
-        : prev.filter((d) => d !== day).sort()
-    );
-  };
-
-  const handleSelectAllDays = (e) => {
-    if (e.target.checked) {
-      setSelectedUnavailableDays(["0", "1", "2", "3", "4", "5", "6"]);
-    } else {
-      setSelectedUnavailableDays([]);
-    }
-  };
-
-  const handleAddUnavailableSlot = async () => {
-    if (!googleUserInfo || !currentUserId) return;
-    if (selectedUnavailableDays.length === 0) {
-      setMessage({ text: "曜日を1つ以上選択。", type: "error" });
-      return;
-    }
-    if (!newUnavailableStartTime || !newUnavailableEndTime) {
-      setMessage({ text: "開始・終了時間を入力。", type: "error" });
-      return;
-    }
-    if (newUnavailableStartTime >= newUnavailableEndTime) {
-      setMessage({ text: "開始時間は終了時間より前に。", type: "error" });
+  // --- Handle User Preference Save ---
+  const handleSaveUserPreference = async (preference) => {
+    if (!currentUserId) {
+      setMessage({ text: "ユーザー情報が取得できません。", type: "error" });
       return;
     }
     setIsLoading(true);
     try {
-      const slotData = {
-        dayOfWeek: selectedUnavailableDays,
-        startTime: newUnavailableStartTime,
-        endTime: newUnavailableEndTime,
-        label:
-          newUnavailableLabel.trim() ||
-          `毎週 ${selectedUnavailableDays
-            .map((d) => DAY_OF_WEEK_MAP[parseInt(d)])
-            .join(", ")}`,
-        createdAt: new Date().toISOString(),
-      };
-      const response = await fetch(`${FLASK_SERVER_URL}/unavailable-slots`, {
+      const response = await fetch(`${FLASK_SERVER_URL}/user-preference`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUserId, slot: slotData }),
+        body: JSON.stringify({
+          userId: currentUserId,
+          preferredModel: preference,
+        }),
       });
       if (!response.ok) {
-        // エラーレスポンスも考慮
         const errorData = await response.json();
-        throw new Error(errorData.error || "固定予定の追加に失敗");
+        throw new Error(errorData.error || "ユーザー設定の保存に失敗しました");
       }
-      setMessage({ text: `固定の予定を追加しました！`, type: "success" });
-      fetchUnavailableSlots();
-      setSelectedUnavailableDays([]);
-      setNewUnavailableLabel("");
+      setUserPreference(preference);
+      setMessage({ text: "ユーザー設定を保存しました！", type: "success" });
     } catch (error) {
-      console.error("Error adding unavailable slot:", error); // エラーログを追加
+      console.error("Error saving user preference:", error);
       setMessage({
-        text: `固定予定の追加に失敗: ${error.message}`,
+        text: `ユーザー設定の保存中にエラーが発生しました: ${error.message}`,
         type: "error",
-      }); // 詳細なエラーメッセージ
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDeleteUnavailableSlot = async (slotId) => {
-    if (!googleUserInfo || !currentUserId) return;
-    setIsLoading(true);
-    try {
-      const response = await fetch(
-        `${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}/${slotId}`,
-        { method: "DELETE" }
-      );
-      if (!response.ok) {
-        // エラーレスポンスも考慮
-        const errorData = await response.json();
-        throw new Error(errorData.error || "固定予定の削除に失敗");
-      }
-      setMessage({ text: "固定の予定を削除しました。", type: "info" });
-      fetchUnavailableSlots();
-    } catch (error) {
-      console.error("Error deleting unavailable slot:", error); // エラーログを追加
-      setMessage({
-        text: `固定予定の削除に失敗: ${error.message}`,
-        type: "error",
-      }); // 詳細なエラーメッセージ
+      });
     } finally {
       setIsLoading(false);
     }
@@ -1392,9 +1322,6 @@ function MainAppContent() {
 
   const visibleTasks = googleUserInfo
     ? tasks.filter((task) => !task.hidden)
-    : [];
-  const displayUnavailableSlots = googleUserInfo
-    ? userDefinedUnavailableSlots
     : [];
 
   if (!isAuthReady) {
@@ -1461,6 +1388,59 @@ function MainAppContent() {
               Googleカレンダーと連携すると、AIが空き時間を見つけて課題を提案します。
             </p>
           </section>
+        )}
+
+        {/* User Preference Section */}
+        {googleUserInfo && ( // Show only if user is logged in
+          <CollapsibleSection
+            title="ユーザー設定"
+            icon={<User className="h-6 w-6 text-purple-500" />}
+            isOpen={true} // You might want to control this with a state
+            setIsOpen={() => {}} // Placeholder, as it's always open for now
+          >
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  あなたは朝型ですか、夜型ですか？
+                </label>
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <label className="flex items-center cursor-pointer bg-blue-50 p-3 rounded-lg border border-blue-200 shadow-sm hover:bg-blue-100 transition flex-1">
+                    <input
+                      type="radio"
+                      name="userPreference"
+                      value="morning"
+                      checked={userPreference === "morning"}
+                      onChange={(e) => handleSaveUserPreference(e.target.value)}
+                      className="form-radio h-5 w-5 text-blue-600"
+                    />
+                    <Sun className="ml-2 mr-1 h-5 w-5 text-blue-500" />
+                    <span className="text-base font-medium text-gray-800">
+                      朝型
+                    </span>
+                  </label>
+                  <label className="flex items-center cursor-pointer bg-indigo-50 p-3 rounded-lg border border-indigo-200 shadow-sm hover:bg-indigo-100 transition flex-1">
+                    <input
+                      type="radio"
+                      name="userPreference"
+                      value="night"
+                      checked={userPreference === "night"}
+                      onChange={(e) => handleSaveUserPreference(e.target.value)}
+                      className="form-radio h-5 w-5 text-indigo-600"
+                    />
+                    <Moon className="ml-2 mr-1 h-5 w-5 text-indigo-500" />
+                    <span className="text-base font-medium text-gray-800">
+                      夜型
+                    </span>
+                  </label>
+                </div>
+              </div>
+              {userPreference === null && (
+                <p className="text-sm text-red-500 text-center">
+                  AI提案を最適化するために、朝型か夜型かを選択してください。
+                </p>
+              )}
+            </div>
+          </CollapsibleSection>
         )}
 
         <CollapsibleSection
@@ -1575,141 +1555,6 @@ function MainAppContent() {
               {/* 編集キャンセルボタンを削除 */}
             </div>
           )}
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          title="固定の予定を追加・管理"
-          icon={<Clock9 className="h-6 w-6 text-purple-500" />}
-          isOpen={showUnavailableSlots}
-          setIsOpen={setShowUnavailableSlots}
-        >
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-0.5">
-                曜日 <span className="text-red-500">*</span>
-              </label>
-              <div className="flex flex-wrap gap-2 sm:gap-3">
-                {Object.entries(DAY_OF_WEEK_MAP).map(([key, value]) => (
-                  <label key={key} className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      value={key}
-                      checked={selectedUnavailableDays.includes(key)}
-                      onChange={handleDayChange}
-                      className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
-                    />
-                    <span className="ml-1 text-sm text-gray-700">{value}</span>
-                  </label>
-                ))}
-                <label className="flex items-center cursor-pointer ml-4">
-                  <input
-                    type="checkbox"
-                    checked={selectedUnavailableDays.length === 7}
-                    onChange={handleSelectAllDays}
-                    className="form-checkbox h-4 w-4 text-purple-600 rounded focus:ring-purple-500"
-                  />
-                  <span className="ml-1 text-sm text-gray-700 font-bold">
-                    毎日
-                  </span>
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="unavailableStartTime"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  開始時間 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="time"
-                  id="unavailableStartTime"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  value={newUnavailableStartTime}
-                  onChange={(e) => setNewUnavailableStartTime(e.target.value)}
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="unavailableEndTime"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  終了時間 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="time"
-                  id="unavailableEndTime"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                  value={newUnavailableEndTime}
-                  onChange={(e) => setNewUnavailableEndTime(e.target.value)}
-                />
-              </div>
-            </div>
-            <div>
-              <label
-                htmlFor="unavailableLabel"
-                className="block text-sm font-medium text-gray-700 mb-0.5"
-              >
-                ラベル (例: バイト, 就寝)
-              </label>
-              <input
-                type="text"
-                id="unavailableLabel"
-                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
-                placeholder="例: バイト"
-                value={newUnavailableLabel}
-                onChange={(e) => setNewUnavailableLabel(e.target.value)}
-              />
-            </div>
-            <button
-              onClick={handleAddUnavailableSlot}
-              className="w-full flex items-center justify-center px-5 py-2.5 bg-purple-600 text-white rounded-full shadow-md hover:bg-purple-700 transition transform hover:scale-105 disabled:opacity-50"
-              disabled={isLoading}
-            >
-              <Plus className="mr-2 h-5 w-5" /> 固定の予定を追加
-            </button>
-
-            <h3 className="text-md font-semibold text-gray-700 mt-6 flex items-center">
-              <CalendarCheck className="h-5 w-5 mr-2" />
-              登録済みの固定の予定
-            </h3>
-            {displayUnavailableSlots.length === 0 ? (
-              <p className="text-gray-500 text-center py-2">
-                固定の予定はまだありません。
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {displayUnavailableSlots.map((slot) => (
-                  <li
-                    key={slot.id}
-                    className="flex items-center justify-between bg-purple-50 p-2.5 rounded-lg border border-purple-200"
-                  >
-                    <div className="flex-1">
-                      <span className="font-semibold text-purple-800">
-                        {Array.isArray(slot.dayOfWeek) &&
-                        slot.dayOfWeek.length === 7
-                          ? "毎日"
-                          : Array.isArray(slot.dayOfWeek)
-                          ? slot.dayOfWeek
-                              .map((d) => DAY_OF_WEEK_MAP[parseInt(d)])
-                              .join(", ")
-                          : ""}
-                      </span>
-                      : {slot.startTime} - {slot.endTime} ({slot.label})
-                    </div>
-                    <button
-                      onClick={() => handleDeleteUnavailableSlot(slot.id)}
-                      className="ml-2 p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
-                      title="削除"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
         </CollapsibleSection>
 
         <CollapsibleSection
@@ -1847,52 +1692,6 @@ function MainAppContent() {
               })}
             </ul>
           )}
-        </CollapsibleSection>
-
-        <CollapsibleSection
-          title="あなたの活動記録"
-          icon={<BarChart className="h-6 w-6 text-blue-500" />}
-          isOpen={showStats}
-          setIsOpen={setShowStats}
-        >
-          <div className="space-y-4 p-2">
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm font-medium text-gray-700">
-                  過去7日間の完了タスク
-                </span>
-                <span className="font-bold text-lg text-blue-600">
-                  {taskStats.week}件
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full"
-                  style={{
-                    width: `${Math.min(100, (taskStats.week / 7) * 100)}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-sm font-medium text-gray-700">
-                  過去30日間の完了タスク
-                </span>
-                <span className="font-bold text-lg text-blue-600">
-                  {taskStats.month}件
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full"
-                  style={{
-                    width: `${Math.min(100, (taskStats.month / 20) * 100)}%`,
-                  }}
-                ></div>
-              </div>
-            </div>
-          </div>
         </CollapsibleSection>
 
         <footer className="text-center text-gray-500 text-xs pt-6 border-t border-gray-200">

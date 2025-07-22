@@ -134,7 +134,6 @@ def apply_skip_feedback_and_save(user_id, task_id, start_time_iso, end_time_iso)
         end_time_jst = end_utc.astimezone(JST)
 
         # 現在のJST時刻を基準に、今週の月曜0時を計算 (ai_logic.pyのSchedulerEnvと同じロジック)
-        # ★修正: start_of_week も aware datetime にする
         now_jst = datetime.now(JST)
         start_of_week = now_jst - timedelta(days=now_jst.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST) # tzinfo=JSTを明示
@@ -175,7 +174,6 @@ def suggest_slot_endpoint():
     
     target_task = tasks[-1]
 
-    # ★★★ ここからが修正箇所 ★★★
     # suggest_best_slotは {"suggestion": ..., "reason": ...} という辞書を返す
     result = suggest_best_slot(target_task, ng_zones, ai_model)
     
@@ -269,99 +267,41 @@ def skip_feedback_endpoint():
 def reject_suggestion_endpoint():
     """
     AIの提案が拒否されたフィードバックを受け取り、
-    該当するQ値を直接引き下げる軽量なAPI。
+    該当する時間スロットのQ値を直接引き下げるAPI。
     """
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "リクエストデータがありません"}), 400
-            
-        user_id = data.get('userId')
-        start_time_iso = data.get('startTime')
-        react_tasks = data.get('react_tasks', []) 
 
-        if not all([user_id, start_time_iso, react_tasks]):
-            return jsonify({"error": "必須データ(userId, startTime, react_tasks)が不足しています"}), 400
-        
+        user_id = data.get('userId')
+        start_time_iso = data.get('startTime') # 拒否された提案の開始時刻
+
+        if not all([user_id, start_time_iso]):
+            return jsonify({"error": "必須データ(userId, startTime)が不足しています"}), 400
+
         # 1. AIモデルをロード
         ai_model_obj = load_ai_model(user_id)
-        
-        # 2. 拒否された提案の「状態(state)」= スロット番号を計算
-        JST = timezone(timedelta(hours=+9))
+
+        # 2. 拒否された提案の「時間スロット番号」を計算
         start_utc = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
         start_time_jst = start_utc.astimezone(JST)
-        
+
         now_jst = datetime.now(JST)
         start_of_week = now_jst - timedelta(days=now_jst.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
-        
+
         start_delta_seconds = max(0, (start_time_jst - start_of_week).total_seconds())
-        rejected_state = int(start_delta_seconds / 1800)
+        rejected_slot = int(start_delta_seconds / 1800)
 
-        # 3. 拒否された提案の「行動(action_index)」を特定
-        tasks_for_suggestion, _ = prepare_inputs_from_react(react_tasks, [], [], for_learning=False)
-        
-        if not tasks_for_suggestion:
-             return jsonify({"error": "フィードバック対象のタスクが見つかりません"}), 400
-        
-        rejected_action_index = len(tasks_for_suggestion) - 1
+        # 3. AIモデルにフィードバックを適用 (新しいapply_rejection_feedbackを呼び出す)
+        ai_model_obj.apply_rejection_feedback(rejected_slot, REJECTION_PENALTY)
 
-        # 4. AIモデルにフィードバックを適用 (Step 1で修正したメソッドを呼び出し)
-        ai_model_obj.apply_rejection_feedback(rejected_state, rejected_action_index, REJECTION_PENALTY)
-        
-        # 5. 更新されたモデルを保存
+        # 4. 更新されたモデルを保存
         save_ai_model(user_id, ai_model_obj)
-        
+
+        print(f"[{user_id}] 提案拒否フィードバックを反映しました。スロット: {rejected_slot}")
         return jsonify({"success": True, "message": "フィードバックを反映しました。"})
-
-    except Exception as e:
-        print(f"提案拒否フィードバックエラー発生: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "サーバー内部でエラーが発生しました"}), 500
-    """
-    AIの提案が拒否されたフィードバックを受け取り、AIモデルを学習するAPI
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "リクエストデータがありません"}), 400
-
-        user_id = data.get('userId')
-        start_time_iso = data.get('startTime')
-        # end_time_iso, unavailable_slots, existing_tasks はai_logic側で使われないため、ここでは必須としない
-        react_tasks = data.get('react_tasks', [])
-
-        if not all([user_id, start_time_iso]): # react_tasks は空の可能性があるのでここで必須チェックしない
-            return jsonify({"error": "必須データ(userId, startTime)が不足しています"}), 400
-
-        ai_model_obj = load_ai_model(user_id)
-
-        # prepare_inputs_from_react の呼び出しから、不要な引数を削除
-        tasks_for_suggestion, _ = prepare_inputs_from_react(react_tasks, [], [], for_learning=False)
-
-        if not tasks_for_suggestion:
-            # 学習対象タスクがない場合は、エラーではなく成功レスポンスを返す
-            return jsonify({"success": True, "message": "フィードバックを受け付けました（学習対象タスクなし）"})
-
-        # rejected_state の計算 (JST aware datetimeを使用)
-        start_utc = datetime.fromisoformat(start_time_iso.replace('Z', '+00:00'))
-        start_time_jst = start_utc.astimezone(JST)
-        now_jst = datetime.now(JST)
-        # ★修正: start_of_week も aware datetime にする
-        start_of_week = now_jst - timedelta(days=now_jst.weekday())
-        start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST) # tzinfo=JSTを明示
-
-        start_delta_seconds = max(0, (start_time_jst - start_of_week).total_seconds())
-        rejected_state = int(start_delta_seconds / 1800)
-
-        # 拒否された行動のインデックスは、通常提案対象のタスクがリストの最後に追加されているため
-        rejected_action_index = len(tasks_for_suggestion) - 1
-
-        ai_model_obj.apply_rejection_feedback(rejected_state, rejected_action_index, REJECTION_PENALTY)
-        save_ai_model(user_id, ai_model_obj)
-
-        return jsonify({"success": True, "message": "フィードバックを基に再学習しました。"})
 
     except Exception as e:
         print(f"提案拒否フィードバックエラー発生: {e}")

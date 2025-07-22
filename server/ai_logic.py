@@ -19,7 +19,7 @@ NUM_BACKGROUND_EPISODES = 200
 DAYS_IN_WEEK = 7
 SLOTS_PER_DAY = 24
 TOTAL_SLOTS = DAYS_IN_WEEK * SLOTS_PER_DAY
-TOTAL_SLOTS_CONSIDERED_FOR_NG = TOTAL_SLOTS * 2 # 提案検索範囲を2週間に
+#TOTAL_SLOTS_CONSIDERED_FOR_NG = TOTAL_SLOTS * 2 # 提案検索範囲を2週間に
 RESCHEDULE_REWARD_BONUS = 25.0
 SKIP_PENALTY = -10.0
 REJECTION_PENALTY = -2.0
@@ -84,15 +84,29 @@ class AIModel:
         except Exception as e:
             print(f"[フィードバックエラー] 集中度マップ更新中にエラー: {e}")
 
-    def apply_rejection_feedback(self, state, action_index, penalty):
-        """提案が拒否されたフィードバックを適用し、特定のQ値を直接更新する"""
-        if not (0 <= action_index < self.num_actions):
+    def apply_rejection_feedback(self, rejected_slot, penalty):
+        """
+        提案が拒否されたフィードバックを適用し、
+        指定された時間スロットのQ値を直接更新する。
+        """
+        # 提案時のQテーブル構造 q_table[0][action] に合わせる
+        # stateは常に0、actionが時間スロット(rejected_slot)
+        state = 0
+        action = rejected_slot
+
+        # Qテーブルにそのstateのエントリがなければ作成
+        if state not in self.q_table:
+            self.q_table[state] = np.zeros(self.num_actions)
+
+        if not (0 <= action < self.num_actions):
+            print(f"警告: 範囲外のアクション({action})のため、拒否フィードバックをスキップします。")
             return
-        
-        old_q_value = self.q_table[state][action_index]
-        self.q_table[state][action_index] += penalty
-        print(f"\n[フィードバック適用] 拒否された提案(state:{state}, action:{action_index})にペナルティ適用。")
-        print(f"  - Q値を更新: {old_q_value:.2f} -> {self.q_table[state][action_index]:.2f}")
+
+        old_q_value = self.q_table[state][action]
+        # Q値を直接ペナルティ分だけ減らす
+        self.q_table[state][action] += penalty
+        print(f"\n[フィードバック適用] 拒否された提案(スロット:{action})にペナルティ適用。")
+        print(f"  - Q値を更新: {old_q_value:.2f} -> {self.q_table[state][action]:.2f}")
 
     def apply_skip_feedback(self, start_slot, end_slot):
         """スキップされた時間帯の集中度マップにペナルティを適用する"""
@@ -152,166 +166,91 @@ class QLearningAgent:
         if self.epsilon > EPSILON_MIN:
             self.epsilon *= EPSILON_DECAY
 
-
-# --- 4. データ変換層 ---
 def prepare_inputs_from_react(react_tasks, unavailable_slots=[], existing_tasks=[], for_learning=False):
-    # --- ★ここからデバッグ★ ---
-    print("\n" + "="*20)
-    print("--- NGゾーン計算デバッグ開始 ---")
-    print(f"入力された固定予定(unavailable_slots): {json.dumps(unavailable_slots, indent=2, ensure_ascii=False)}")
-    # --- ★ここまでデバッグ★ ---
+    """
+    Reactからの入力データをAIロジックで扱える形式に変換し、
+    NGゾーン（予約不可な時間スロット）を計算する。
+    """
+    print("\n--- NGゾーン計算 開始 ---")
+    print(f"入力: 固定予定(unavailable_slots) = {len(unavailable_slots)}件, 既存タスク(existing_tasks) = {len(existing_tasks)}件")
 
+    # 1. AIが評価するタスクリストを作成
     tasks_list = []
-    # ( ... tasks_listを作成するロジックはそのまま ... )
     for task_data in react_tasks:
-        if not (task_data.get('estimatedTime') and int(task_data['estimatedTime']) > 0):
-            continue
-        is_target_task = for_learning or ((not task_data.get('completed', False) and not task_data.get('start')) or task_data.get('rescheduled', False))
-        if is_target_task:
-            tasks_list.append(Task(id=task_data.get('id', 'temp-id'), name=task_data.get('title', '無題'), required_slots=-(-int(task_data['estimatedTime']) // 30), deadline_str=task_data.get('deadline'), rescheduled=task_data.get('rescheduled', False)))
+        # 見積もり時間が存在し、0より大きいタスクのみを対象とする
+        if task_data.get('estimatedTime') and int(task_data['estimatedTime']) > 0:
+            required_slots = -(-int(task_data['estimatedTime']) // 30)  # 30分単位で切り上げ
+            tasks_list.append(Task(
+                id=task_data.get('id', 'temp-id'),
+                name=task_data.get('title', '無題'),
+                required_slots=required_slots,
+                deadline_str=task_data.get('deadline'),
+                rescheduled=task_data.get('rescheduled', False)
+            ))
 
-
+    # 2. NGゾーンを計算
     ng_zones = set()
     now_jst = datetime.now(JST)
+    # 週の始まりを月曜日に固定
     start_of_week = now_jst - timedelta(days=now_jst.weekday())
     start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # ( ... NGゾーンを計算するロジックはそのまま ... )
-    for slot in unavailable_slots:
-        for day_str in slot.get('dayOfWeek', []):
-            try:
-                day_of_week_int = int(day_str)
-                for day_offset in range(DAYS_IN_WEEK):
-                    target_date = start_of_week.date() + timedelta(days=day_offset)
-                    python_weekday = (target_date.weekday() + 1) % 7
-                    if python_weekday == day_of_week_int:
-                        start_h, start_m = map(int, slot['startTime'].split(':'))
-                        end_h, end_m = map(int, slot['endTime'].split(':'))
-                        start_slot_of_day = start_h * 2 + start_m // 30
-                        end_slot_of_day = end_h * 2 + end_m // 30
-                        base_slot_index = day_offset * SLOTS_PER_DAY
-                        for s in range(start_slot_of_day, end_slot_of_day):
-                            ng_zones.add(base_slot_index + s)
-            except (ValueError, KeyError):
-                pass
-
+    # 2-1. Googleカレンダーなどから取得した「既に確保済みのタスク」をNGゾーンに追加
     for task in existing_tasks:
         start_str, end_str = task.get('start'), task.get('end')
         if start_str and end_str:
             try:
-                start_time_utc = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                end_time_utc = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
-                start_time_jst = start_time_utc.astimezone(JST)
-                end_time_jst = end_time_utc.astimezone(JST)
-                start_delta = (start_time_jst - start_of_week).total_seconds()
-                end_delta = (end_time_jst - start_of_week).total_seconds()
-                if start_delta >= 0:
-                    start_slot = int(start_delta / 1800)
-                    end_slot = int(end_delta / 1800)
-                    for s in range(start_slot, end_slot):
-                        if 0 <= s < TOTAL_SLOTS:
-                            ng_zones.add(s)
-            except (ValueError, TypeError):
-                pass
-    
-    #ここから変更しみず
-    # ReactのgetDay()は日曜=0, 月曜=1, ..., 土曜=6
-    # Pythonのweekday()は月曜=0, 火曜=1, ..., 日曜=6
-    # 変換マップ: Reactの曜日インデックス -> Pythonの曜日インデックス
-    react_to_python_weekday_map = {
-        0: 6, # 日曜
-        1: 0, # 月曜
-        2: 1, # 火曜
-        3: 2, # 水曜
-        4: 3, # 木曜
-        5: 4, # 金曜
-        6: 5  # 土曜
-    }
+                start_utc = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                end_utc = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+                start_jst = start_utc.astimezone(JST)
+                end_jst = end_utc.astimezone(JST)
 
-    for slot in unavailable_slots:
-        for day_str in slot.get('dayOfWeek', []):
-            try:
-                react_weekday_int = int(day_str)
-                python_target_weekday = react_to_python_weekday_map.get(react_weekday_int)
-                
-                if python_target_weekday is None:
-                    print(f"警告: 不明な曜日インデックス '{react_weekday_int}' が検出されました。スキップします。")
-                    continue
+                # 週の始まりからの経過秒数を計算
+                start_delta_seconds = (start_jst - start_of_week).total_seconds()
+                end_delta_seconds = (end_jst - start_of_week).total_seconds()
 
-                start_h, start_m = map(int, slot['startTime'].split(':'))
-                end_h, end_m = map(int, slot['endTime'].split(':'))
-
-                start_slot_of_day = (start_h * 60 + start_m) // 30
-                end_slot_of_day = (end_h * 60 + end_m) // 30
-                
-                # 変更: 終了時刻の扱いの改善
-                # 終了時刻が00分の場合、その前の30分スロットまでとする（例: 10:00 -> 9:30まで）
-                # ただし、00:00-00:00 のような指定は考慮しない
-                if end_m == 0 and end_h != 0:
-                    end_slot_of_day -= 1
-                # 23:59 の場合、その日の最後のスロット (47) を含むように調整
-                if end_h == 23 and end_m == 59:
-                    end_slot_of_day = SLOTS_PER_DAY - 1 # 47
-
-                # 変更: 過去1週間と未来1週間（合計2週間分）を考慮してNGゾーンを設定
-                for week_offset in range(-1, 2): # 前週(-1), 今週(0), 来週(1)
-                    for day_offset_in_week in range(DAYS_IN_WEEK):
-                        # Pythonのweekday()と一致する曜日のみ処理
-                        if day_offset_in_week == python_target_weekday:
-                            # 週の始まりからの絶対スロットインデックスの基点を計算
-                            # ここで TOTAL_SLOTS * 2 の範囲は、前週から来週までをカバーするため
-                            base_slot_index = (week_offset * DAYS_IN_WEEK + day_offset_in_week) * SLOTS_PER_DAY
-                            
-                            # 日をまたぐ設定 (例: 22:00 - 02:00) の場合
-                            if end_slot_of_day <= start_slot_of_day:
-                                # 開始時刻からその日の終わりまで
-                                for s in range(start_slot_of_day, SLOTS_PER_DAY):
-                                    absolute_slot = base_slot_index + s
-                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2: 
-                                        ng_zones.add(absolute_slot)
-                                # 翌日の開始から終了時刻まで
-                                next_day_base_slot_index = (week_offset * DAYS_IN_WEEK + day_offset_in_week + 1) * SLOTS_PER_DAY
-                                for s in range(0, end_slot_of_day + 1): # +1 で終了スロットを含むように修正
-                                    absolute_slot = next_day_base_slot_index + s
-                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2:
-                                        ng_zones.add(absolute_slot)
-                            else: # 日をまたがない場合
-                                for s in range(start_slot_of_day, end_slot_of_day + 1): # 変更: +1 で終了スロットを含む
-                                    absolute_slot = base_slot_index + s
-                                    if 0 <= absolute_slot < TOTAL_SLOTS * 2:
-                                        ng_zones.add(absolute_slot)
-            except (ValueError, KeyError) as e:
-                print(f"固定予定のパースエラー: {e}, slot: {slot}")
-
-    # 変更: 既に配置済みのタスクをNGゾーンに追加するロジック全体
-    for task in existing_tasks:
-        start_str = task.get('start')
-        end_str = task.get('end')
-
-        if start_str and end_str:
-            try:
-                start_time_utc = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                end_time_utc = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
-
-                start_time_jst = start_time_utc.astimezone(JST)
-                end_time_jst = end_time_utc.astimezone(JST)
-
-                start_delta_seconds = (start_time_jst - start_of_week).total_seconds()
-                end_delta_seconds = (end_time_jst - start_of_week).total_seconds()
-
+                # 今週の範囲内のみを考慮
                 if start_delta_seconds >= 0:
                     start_slot = int(start_delta_seconds / 1800)
                     end_slot = int(end_delta_seconds / 1800)
-                    
-                    for s in range(start_slot, end_slot): # end_slotは含まれないのでこれでOK
-                        if 0 <= s < TOTAL_SLOTS: # TOTAL_SLOTSは1週間分なので、これを超えないように
+                    for s in range(start_slot, end_slot):
+                        if 0 <= s < TOTAL_SLOTS:
                             ng_zones.add(s)
             except (ValueError, TypeError) as e:
                 print(f"既存タスクの日時パースエラー: {e}, task: {task}")
-    
 
-    return tasks_list, sorted(list(ng_zones))#ここまで
 
+    # 2-2. ユーザーが設定した「毎週の固定予定」をNGゾーンに追加
+    # Reactの曜日 (日曜=0) -> Pythonの曜日 (月曜=0) への変換マップ
+    react_to_python_weekday_map = { 0: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5 }
+
+    for slot in unavailable_slots:
+        try:
+            start_h, start_m = map(int, slot['startTime'].split(':'))
+            end_h, end_m = map(int, slot['endTime'].split(':'))
+            start_slot_of_day = (start_h * 60 + start_m) // 30
+            end_slot_of_day = (end_h * 60 + end_m) // 30
+
+            for day_str in slot.get('dayOfWeek', []):
+                react_weekday = int(day_str)
+                python_weekday = react_to_python_weekday_map.get(react_weekday)
+                if python_weekday is None:
+                    continue
+                
+                # その曜日の00:00からのスロットインデックスを計算
+                base_slot_index = python_weekday * SLOTS_PER_DAY
+                for s_offset in range(start_slot_of_day, end_slot_of_day):
+                    ng_zones.add(base_slot_index + s_offset)
+
+        except (ValueError, KeyError) as e:
+            print(f"固定予定のパースエラー: {e}, slot: {slot}")
+
+    sorted_ng_zones = sorted(list(ng_zones))
+    print(f"計算結果: NGゾーンは {len(sorted_ng_zones)} スロット")
+    # print(f"NGスロット詳細: {sorted_ng_zones}") # デバッグ用に詳細を見たい場合はコメントアウトを外す
+    print("--- NGゾーン計算 終了 ---")
+
+    return tasks_list, sorted_ng_zones
 
 # --- 4. 実行ロジック ---
 def suggest_best_slot(target_task, ng_zones, ai_model):
