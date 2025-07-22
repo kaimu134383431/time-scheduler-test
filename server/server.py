@@ -9,7 +9,7 @@ import json
 from flask_apscheduler import APScheduler
 
 # ai_logic.py から必要な関数とクラスをインポート
-from ai_logic import AIModel, Task, prepare_inputs_from_react, suggest_best_slot, learning, TOTAL_SLOTS, REJECTION_PENALTY
+from ai_logic import AIModel, Task, prepare_inputs_from_react, suggest_best_slot, learning, TOTAL_SLOTS, REJECTION_PENALTY, QLearningAgent
 from datetime import datetime, timedelta, timezone 
 JST = timezone(timedelta(hours=+9))
 
@@ -18,6 +18,7 @@ DATA_DIR = 'data'
 AI_MODELS_DIR = os.path.join(DATA_DIR, 'ai_models')
 USER_TASKS_DIR = os.path.join(DATA_DIR, 'user_tasks')
 UNAVAILABLE_SLOTS_DIR = os.path.join(DATA_DIR, 'unavailable_slots')
+USER_PREFERENCES_DIR = os.path.join(DATA_DIR, 'user_preferences')
 
 # Flaskアプリケーションの準備
 app = Flask(__name__)
@@ -41,19 +42,71 @@ def ensure_data_dirs():
     os.makedirs(AI_MODELS_DIR, exist_ok=True)
     os.makedirs(USER_TASKS_DIR, exist_ok=True)
     os.makedirs(UNAVAILABLE_SLOTS_DIR, exist_ok=True)
+    os.makedirs(USER_PREFERENCES_DIR, exist_ok=True) # 追加
 
 # --- データ読み書きヘルパー関数 (ファイルベース) ---
 def load_ai_model(user_id):
+    """
+    ユーザーのAIモデルを読み込む。
+    存在しない場合は、ユーザー設定に基づいて新しいモデルを作成する。
+    """
     model_path = os.path.join(AI_MODELS_DIR, f'{user_id}.json')
+    
+    # ユーザーのモデルファイルが既に存在する場合
     if os.path.exists(model_path):
         with open(model_path, 'r', encoding='utf-8') as f:
             try:
                 model_data = json.load(f)
-                return AIModel(model_data)
+                # ファイルが空でないことを確認
+                if model_data:
+                    print(f"[{user_id}] 既存のAIモデルを読み込みました。")
+                    return AIModel(model_data)
+                else:
+                    print(f"警告: モデルファイル {model_path} が空です。新しいモデルを作成します。")
             except json.JSONDecodeError:
-                print(f"警告: モデルファイル {model_path} が空または壊れています。新しいモデルを作成します。")
-                return AIModel(None)
-    return AIModel(None)
+                print(f"警告: モデルファイル {model_path} が壊れています。新しいモデルを作成します。")
+                # 壊れていた場合も、新規作成ロジックに流す
+                pass
+
+    # --- 新規ユーザー、またはモデルファイルが壊れていた/空だった場合の処理 ---
+    print(f"[{user_id}] AIモデルの新規作成ロジックを開始します。")
+    preference_data = load_user_preference(user_id)
+    preference_type = preference_data.get("preferenceType", "neutral") # デフォルトは neutral
+
+    template_filename = None
+    if preference_type == 'morning':
+        template_filename = 'trained_morning_model.json'
+    elif preference_type == 'night':
+        template_filename = 'trained_night_model.json'
+        
+    # 朝型または夜型のテンプレートファイルが存在する場合、それを読み込む
+    if template_filename:
+        # dataディレクトリ内へのフルパスを作成
+        template_path = os.path.join(DATA_DIR, template_filename)
+        
+        # 修正したパスでファイルの存在を確認
+        if os.path.exists(template_path):
+            print(f"[{user_id}] {preference_type} の設定に基づき、テンプレート '{template_path}' からモデルを初期化します。")
+            # 修正したパスでファイルを開く
+            with open(template_path, 'r', encoding='utf-8') as f:
+                try:
+                    template_data = json.load(f)
+                    new_model = AIModel(template_data)
+                    save_ai_model(user_id, new_model)
+                    print(f"[{user_id}] テンプレートから初期化したモデルを保存しました。")
+                    return new_model
+                except json.JSONDecodeError:
+                    print(f"警告: テンプレートファイル '{template_filename}' が壊れています。デフォルトモデルで初期化します。")
+        elif template_filename:
+            print(f"警告: テンプレートファイル '{template_filename}' が見つかりません。デフォルトモデルで初期化します。")
+
+    # neutralの場合、またはテンプレートが利用できなかった場合、デフォルトモデルを初期化
+    print(f"[{user_id}] デフォルトのAIモデルを新規に作成します。")
+    new_model = AIModel(None) # ai_logic.py の _initialize_new_model が呼ばれる
+    save_ai_model(user_id, new_model)
+    print(f"[{user_id}] デフォルトの新規モデルを保存しました。")
+    return new_model
+
 
 def save_ai_model(user_id, ai_model):
     model_path = os.path.join(AI_MODELS_DIR, f'{user_id}.json')
@@ -64,7 +117,10 @@ def load_user_tasks(user_id):
     tasks_path = os.path.join(USER_TASKS_DIR, f'{user_id}_tasks.json')
     if os.path.exists(tasks_path):
         with open(tasks_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return [] # 空または壊れたファイルの場合は空リストを返す
     return []
 
 def save_user_tasks(user_id, tasks_list):
@@ -76,7 +132,10 @@ def load_unavailable_slots(user_id):
     slots_path = os.path.join(UNAVAILABLE_SLOTS_DIR, f'{user_id}_unavailable_slots.json')
     if os.path.exists(slots_path):
         with open(slots_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return []
     return []
 
 def save_unavailable_slots(user_id, slots_list):
@@ -84,9 +143,25 @@ def save_unavailable_slots(user_id, slots_list):
     with open(slots_path, 'w', encoding='utf-8') as f:
         json.dump(slots_list, f, indent=2, ensure_ascii=False)
 
+def load_user_preference(user_id):
+    pref_path = os.path.join(USER_PREFERENCES_DIR, f'{user_id}_preference.json')
+    if os.path.exists(pref_path):
+        with open(pref_path, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {"preferenceType": "neutral"}
+    return {"preferenceType": "neutral"} # デフォルト値
+
+def save_user_preference(user_id, preference_data):
+    pref_path = os.path.join(USER_PREFERENCES_DIR, f'{user_id}_preference.json')
+    with open(pref_path, 'w', encoding='utf-8') as f:
+        json.dump(preference_data, f, indent=2, ensure_ascii=False)
+
+
 def learn_from_feedback_and_save(user_id, start_time_iso, end_time_iso, rating, react_tasks, unavailable_slots, existing_tasks):
     """
-    フィードバックに基づき、AIモデルの学習と保存を非同期で実行する関数。
+    フィードバックに基づき、AIモデルの学習ジョブを非同期で実行する関数。
     """
     try:
         print(f"[{user_id}] バックグラウンド学習ジョブを開始します (トリガー: フィードバック)。")
@@ -159,14 +234,26 @@ def suggest_slot_endpoint():
     if request.method == 'OPTIONS': return jsonify(success=True)
     
     data = request.get_json()
+
+    print("--- フロントエンドから受信した生データ ---")
+    print(data)
+    print("------------------------------------")
+    
     if not data or 'userId' not in data or 'task' not in data:
         return jsonify({"error": "必須データが不足しています"}), 400
     
-    ai_model = load_ai_model(data['userId'])
+    user_id = data['userId']
+    ai_model = load_ai_model(user_id)
+    
+    tasks_to_consider = data.get('uncompletedTasks', []) + [data['task']]
+    
+    rejected_slot_data = data.get('rejectedSlot')
+
     tasks, ng_zones = prepare_inputs_from_react(
-        data.get('uncompletedTasks', []) + [data['task']], 
+        tasks_to_consider, 
         data.get('unavailableSlots', []), 
-        data.get('existingTasks', [])
+        data.get('existingTasks', []),
+        rejected_slot=rejected_slot_data 
     )
     
     if not tasks:
@@ -174,18 +261,14 @@ def suggest_slot_endpoint():
     
     target_task = tasks[-1]
 
-    # suggest_best_slotは {"suggestion": ..., "reason": ...} という辞書を返す
     result = suggest_best_slot(target_task, ng_zones, ai_model)
     
-    # 成功した場合、'suggestion'キーの中身だけを取り出して返す
     if result and result.get("suggestion"):
-        # 提案内容にタスクIDとタイトルを追加して返す
         suggestion_data = result["suggestion"]
         suggestion_data["taskId"] = target_task.id
         suggestion_data["title"] = target_task.name
         return jsonify(suggestion_data)
     else:
-    # 失敗した場合、'reason'キーの中身をエラーメッセージとして返す
         reason = result.get("reason", "不明なエラーにより提案できませんでした。")
         return jsonify({"error": reason}), 404
 
@@ -292,10 +375,11 @@ def reject_suggestion_endpoint():
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
 
         start_delta_seconds = max(0, (start_time_jst - start_of_week).total_seconds())
-        rejected_slot = int(start_delta_seconds / 1800)
+        rejected_slot = int(start_delta_seconds / 1800) % TOTAL_SLOTS
 
         # 3. AIモデルにフィードバックを適用 (新しいapply_rejection_feedbackを呼び出す)
-        ai_model_obj.apply_rejection_feedback(rejected_slot, REJECTION_PENALTY)
+        # 状態は常に0と仮定 (バンディット問題)
+        ai_model_obj.apply_rejection_feedback(0, rejected_slot, REJECTION_PENALTY)
 
         # 4. 更新されたモデルを保存
         save_ai_model(user_id, ai_model_obj)
@@ -308,6 +392,33 @@ def reject_suggestion_endpoint():
         import traceback
         traceback.print_exc()
         return jsonify({"error": "サーバー内部でエラーが発生しました"}), 500
+
+# --- ユーザー設定 (朝型/夜型) API ---
+@app.route('/user-preference/<string:user_id>', methods=['GET'])
+def get_user_preference_endpoint(user_id):
+    """ユーザーの設定を取得する"""
+    try:
+        preference = load_user_preference(user_id)
+        return jsonify(preference)
+    except Exception as e:
+        print(f"ユーザー設定の取得エラー: {e}")
+        return jsonify({"error": "設定の取得中にエラーが発生しました"}), 500
+
+@app.route('/user-preference/<string:user_id>', methods=['POST'])
+def save_user_preference_endpoint(user_id):
+    """ユーザーの設定を保存する"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "データがありません"}), 400
+        
+        save_user_preference(user_id, data)
+
+        return jsonify({"success": True, "message": "設定を保存しました"})
+    except Exception as e:
+        print(f"ユーザー設定の保存エラー: {e}")
+        return jsonify({"error": "設定の保存中にエラーが発生しました"}), 500
+
 
 # --- タスク管理API ---
 @app.route('/tasks/<string:user_id>', methods=['GET'])
@@ -334,7 +445,7 @@ def add_task_endpoint():
         task_data['id'] = str(uuid.uuid4())
         tasks.append(task_data)
         save_user_tasks(user_id, tasks)
-        return jsonify({"success": True, "message": "タスクを追加しました", "taskId": task_data['id']})
+        return jsonify({"success": True, "message": "タスクを追加しました", "task": task_data})
     except Exception as e:
         return jsonify({"error": "タスクの追加中にエラーが発生しました"}), 500
 
@@ -350,7 +461,10 @@ def update_task_endpoint(user_id, task_id):
         found = False
         for i, task in enumerate(tasks):
             if task['id'] == task_id:
-                tasks[i].update(data)
+                # Noneでない値だけを更新する
+                for key, value in data.items():
+                    if value is not None:
+                        tasks[i][key] = value
                 found = True
                 break
         
@@ -403,7 +517,6 @@ def add_unavailable_slot_endpoint():
         save_unavailable_slots(user_id, slots)
         return jsonify({"success": True, "message": "固定の予定を追加しました", "slotId": slot_data['id']})
     except Exception as e:
-        # このエラーメッセージは本来表示されませんが、念のため残しておきます
         print(f"固定の予定の追加中に予期せぬエラー: {e}")
         return jsonify({"error": "固定の予定の追加中にエラーが発生しました"}), 500
 
@@ -421,6 +534,29 @@ def delete_unavailable_slot_endpoint(user_id, slot_id):
         return jsonify({"success": True, "message": "固定の予定を削除しました"})
     except Exception as e:
         return jsonify({"error": "固定の予定の削除中にエラーが発生しました"}), 500
+
+@app.route('/reset-model/<string:user_id>', methods=['POST'])
+def reset_model_endpoint(user_id):
+    """ユーザーのAI学習モデルと設定を削除（リセット）する"""
+    try:
+        model_path = os.path.join(AI_MODELS_DIR, f'{user_id}.json')
+        pref_path = os.path.join(USER_PREFERENCES_DIR, f'{user_id}_preference.json')
+
+        # AIモデルファイルの削除
+        if os.path.exists(model_path):
+            os.remove(model_path)
+            print(f"[{user_id}] AIモデルがユーザーのリクエストによりリセットされました。")
+
+        #ユーザー設定ファイルの削除
+        if os.path.exists(pref_path):
+            os.remove(pref_path)
+            print(f"[{user_id}] ユーザー設定がリセットされました。")
+            
+        return jsonify({"success": True, "message": "学習データと設定がリセットされました。"})
+
+    except Exception as e:
+        print(f"AIモデルと設定のリセット中にエラー発生: {e}")
+        return jsonify({"error": "リセット処理中にエラーが発生しました。"}), 500
 
 
 if __name__ == '__main__':

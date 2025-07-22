@@ -21,7 +21,6 @@ import {
   ChevronDown,
   ChevronUp,
   Trash2,
-  // BarChart, // For stats - REMOVED
   Star, // For ratings
   ThumbsUp,
   RefreshCw,
@@ -29,10 +28,10 @@ import {
   Rewind, // スキップアイコン用
   Sun, // 朝型アイコン
   Moon, // 夜型アイコン
+  RotateCw, // リセットアイコン
 } from "lucide-react";
 
 // Firebase configuration placeholder - This setting will be overwritten by __firebase_config provided by the Canvas environment.
-// For local development and testing, you can put your actual Firebase configuration here.
 const FIREBASE_CONFIG_PLACEHOLDER = {
   apiKey: "AIzaSyCfAwrP9o5v2YbN269xirD4zsLm5YIM1X4", // Demo key. Please replace with your actual key.
   authDomain: "oceanic-student-460514-v8.firebaseapp.com",
@@ -49,8 +48,7 @@ const initialAuthToken =
     ? __initial_auth_token
     : undefined;
 
-// Google OAuth Client ID - This should ideally be fetched from environment variables.
-// It is directly written here for testing purposes, but caution is advised in production environments.
+// Google OAuth Client ID
 const GOOGLE_CLIENT_ID =
   "658537863941-7faa9ifaqso60b9kks1m6l4h4tgmt7up.apps.googleusercontent.com";
 
@@ -69,7 +67,7 @@ const StarRating = ({ rating, setRating, readOnly = false }) => {
           <label key={index}>
             <input
               type="radio"
-              name={`rating-${Math.random()}`} // Generate unique name attribute
+              name={`rating-${Math.random()}`}
               className="hidden"
               value={ratingValue}
               onClick={() => !readOnly && setRating(ratingValue)}
@@ -94,24 +92,20 @@ const StarRating = ({ rating, setRating, readOnly = false }) => {
 };
 
 // --- Completion Feedback Modal Component ---
-// Modal for inputting feedback (concentration level and completion time) when a task is completed.
 const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
-  // デフォルトを0に変更 (ユーザーの要望)
   const [concentrationRating, setConcentrationRating] = useState(0);
   const [completionDateTime, setCompletionDateTime] = useState(() => {
     const now = new Date();
-    // 日本時間でYYYY-MM-DDTHH:MM形式の文字列を生成
     const options = {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-      hourCycle: "h23", // 24時間表示
-      timeZone: "Asia/Tokyo", // 明示的に日本時間を指定
+      hourCycle: "h23",
+      timeZone: "Asia/Tokyo",
     };
     const formatter = new Intl.DateTimeFormat("ja-JP", options);
-    // formatter.formatToParts() を呼び出して、その結果の配列から各部分を取得
     const parts = formatter.formatToParts(now);
 
     const year = parts.find((p) => p.type === "year").value;
@@ -129,7 +123,6 @@ const CompletionFeedbackModal = ({ task, onClose, onSave, isLoading }) => {
 
   if (!task) return null;
 
-  // 課題が期限切れかどうかを判定 (現在時刻を考慮)
   const isOverdue =
     task.end && new Date() > new Date(task.end) && !task.completed;
 
@@ -199,6 +192,7 @@ function MainAppContent() {
   const [auth, setAuth] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [unavailableSlots, setUnavailableSlots] = useState([]);
   const authCheckCompletedRef = useRef(false);
 
   const [tasks, setTasks] = useState([]);
@@ -217,10 +211,9 @@ function MainAppContent() {
   const [showTaskInput, setShowTaskInput] = useState(true);
   const [showTaskList, setShowTaskList] = useState(true);
 
-  // New state for user preference (morning/night person)
-  const [userPreference, setUserPreference] = useState(null); // 'morning' or 'night'
+  const [userPreference, setUserPreference] = useState(null);
+  const [showUserPreference, setShowUserPreference] = useState(true);
 
-  // State to control the display of the modal for entering concentration level and completion time
   const [
     showCompletionFeedbackModalForTask,
     setShowCompletionFeedbackModalForTask,
@@ -240,7 +233,6 @@ function MainAppContent() {
           ? JSON.parse(window.__firebase_config)
           : FIREBASE_CONFIG_PLACEHOLDER;
 
-      // Check if Firebase configuration is incomplete
       if (
         !firebaseConfig.projectId ||
         firebaseConfig.projectId === "YOUR_PROJECT_ID"
@@ -250,7 +242,6 @@ function MainAppContent() {
           text: "Firebase設定が不完全です。管理者に問い合わせるか、Firebase設定を確認してください。",
           type: "error",
         });
-        // Even if Firebase is not configured, set authReady to true to display the UI.
         setIsAuthReady(true);
         return;
       }
@@ -401,7 +392,7 @@ function MainAppContent() {
         return createdAtA - createdAtB;
       });
 
-      setTasks(fetchedTasks.filter((task) => !task.hidden)); // hiddenなタスクは非表示
+      setTasks(fetchedTasks.filter((task) => !task.hidden));
       setMessage({ text: "課題リストを更新しました。", type: "info" });
     } catch (error) {
       console.error("Error fetching tasks:", error);
@@ -434,19 +425,47 @@ function MainAppContent() {
       );
       if (response.ok) {
         const data = await response.json();
-        setUserPreference(data.preferred_model || null);
+        const pref = data.preferenceType; // 'morning', 'night', or 'neutral'
+        // neutralや未設定は未完了とみなす
+        if (pref && pref !== "neutral") {
+          setUserPreference(pref);
+          setShowUserPreference(false); // 設定済みならセクションを閉じる
+        } else {
+          setUserPreference(null);
+          setShowUserPreference(true); // 未設定ならセクションを開く
+        }
       } else {
-        // Preference might not be set yet, which is fine.
         console.warn("User preference not found or error fetching.");
         setUserPreference(null);
+        setShowUserPreference(true);
       }
     } catch (error) {
       console.error("Error fetching user preference:", error);
       setUserPreference(null);
+      setShowUserPreference(true);
     }
   };
 
-  // Fetch user preference when user logs in
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    const fetchUnavailableSlots = async () => {
+      try {
+        const response = await fetch(
+          `${FLASK_SERVER_URL}/unavailable-slots/${currentUserId}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          setUnavailableSlots(data || []);
+        }
+      } catch (error) {
+        console.error("固定NGゾーンの取得に失敗:", error);
+      }
+    };
+
+    fetchUnavailableSlots();
+  }, [currentUserId]);
+
   useEffect(() => {
     if (currentUserId) {
       fetchUserPreference();
@@ -532,7 +551,6 @@ function MainAppContent() {
     }
   };
 
-  // --- Google Calendar Event Management ---
   const addEventToGoogleCalendar = async (
     title,
     startTime,
@@ -540,9 +558,6 @@ function MainAppContent() {
     description = ""
   ) => {
     if (!googleAccessToken) {
-      console.warn(
-        "Google Access Token not available. Cannot add event to Google Calendar."
-      );
       setMessage({
         text: "Googleカレンダー連携が有効ではありません。イベントを追加できません。",
         type: "warning",
@@ -579,7 +594,6 @@ function MainAppContent() {
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("Error adding event to Google Calendar:", errorData);
         setMessage({
           text: `Googleカレンダーへの追加に失敗しました: ${errorData.error.message}`,
           type: "error",
@@ -594,7 +608,6 @@ function MainAppContent() {
       });
       return { success: true, eventId: data.id };
     } catch (error) {
-      console.error("Error adding event to Google Calendar:", error);
       setMessage({
         text: "Googleカレンダーへの追加中にエラーが発生しました。",
         type: "error",
@@ -607,16 +620,8 @@ function MainAppContent() {
 
   const deleteEventFromGoogleCalendar = async (eventId) => {
     if (!googleAccessToken) {
-      console.warn(
-        "Google Access Token not available. Cannot delete event from Google Calendar."
-      );
-      setMessage({
-        text: "Googleカレンダー連携が有効ではありません。イベントを削除できません。",
-        type: "warning",
-      });
       return false;
     }
-
     setIsLoading(true);
     try {
       const response = await fetch(
@@ -628,33 +633,20 @@ function MainAppContent() {
           },
         }
       );
-
-      if (response.status !== 204 && response.ok) {
-        // response.ok は status 2xx をチェックするので、204は含まれる
-        // 204 No Content の場合は json() を呼び出すとエラーになるので注意
-        // response.ok が true で status が 204 以外の場合にのみ json() を試みる
-        if (response.status !== 204) {
-          const errorData = await response.json();
-          console.error(
-            "Error deleting event from Google Calendar:",
-            errorData
-          );
-          setMessage({
-            text: `Googleカレンダーからの削除に失敗しました: ${errorData.error.message}`,
-            type: "error",
-          });
-          return false;
-        }
+      if (!response.ok && response.status !== 204) {
+        const errorData = await response.json();
+        setMessage({
+          text: `Googleカレンダーからの削除に失敗しました: ${errorData.error.message}`,
+          type: "error",
+        });
+        return false;
       }
-      // 204 No Content の場合はそのまま成功とみなす
-
       setMessage({
         text: "Googleカレンダーからイベントを削除しました。",
         type: "info",
       });
       return true;
     } catch (error) {
-      console.error("Error deleting event from Google Calendar:", error);
       setMessage({
         text: "Googleカレンダーからの削除中にエラーが発生しました。",
         type: "error",
@@ -666,10 +658,18 @@ function MainAppContent() {
   };
 
   const handleRejectAndResuggest = async () => {
-    if (!currentUserId || !aiDateSuggestion) return;
-    if (!userPreference) {
+    // aiDateSuggestionが存在しない場合は、エラーを防ぐために処理を中断する
+    if (!aiDateSuggestion) {
+      console.error(
+        "エラー: 再提案ボタンが、AIの提案がない状態で押されました。"
+      );
+      return;
+    }
+
+    // ユーザーIDや設定のチェックはそのまま
+    if (!currentUserId || !userPreference) {
       setMessage({
-        text: "朝型/夜型の設定を選択してください。",
+        text: "再提案に必要な情報が不足しています。",
         type: "error",
       });
       return;
@@ -682,51 +682,27 @@ function MainAppContent() {
     });
 
     try {
-      const newTaskForLearning = {
-        id: "temp-" + Date.now(),
-        title: newTaskTitle,
-        estimatedTime: parseInt(newTaskEstimate),
-        deadline: newTaskDeadline || null,
-        completed: false,
-        hidden: false,
-      };
-
-      const allUncompletedTasks = [
-        ...tasks.filter((t) => !t.completed),
-        newTaskForLearning,
-      ];
-
-      const existingPlacedTasks = tasks.filter((t) => t.start && !t.completed);
-
       const rejectResponse = await fetch(
         `${FLASK_SERVER_URL}/reject-suggestion`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: currentUserId,
+            // この時点では aiDateSuggestion は null ではないことが保証されている
             startTime: aiDateSuggestion.suggestedSlot.start.toISOString(),
-            endTime: aiDateSuggestion.suggestedSlot.end.toISOString(),
-            react_tasks: allUncompletedTasks,
-            existingTasks: existingPlacedTasks,
-            preferredModel: userPreference, // Pass user preference
           }),
         }
       );
 
       if (!rejectResponse.ok) {
         const errorData = await rejectResponse.json();
-        setMessage({
-          text: `フィードバック学習中にエラー: ${errorData.error}`,
-          type: "error",
-        });
+        throw new Error(errorData.error || "フィードバックの送信に失敗");
       }
 
-      await requestAiSuggestion();
+      // 再提案を依頼。引数に「拒否したスロット」の情報を渡す
+      await requestAiSuggestion(aiDateSuggestion.suggestedSlot);
     } catch (error) {
-      console.error("Error rejecting and resuggesting:", error);
       setMessage({
         text: `再提案中にエラーが発生しました: ${error.message}`,
         type: "error",
@@ -735,9 +711,7 @@ function MainAppContent() {
     }
   };
 
-  // --- Task Management ---
-  // requestAiSuggestion 関数を修正
-  const requestAiSuggestion = async () => {
+  const requestAiSuggestion = async (rejectedSlot = null) => {
     if (!googleUserInfo) {
       setMessage({
         text: "AI提案を利用するにはGoogleログインが必要です。",
@@ -762,33 +736,40 @@ function MainAppContent() {
 
     setIsLoading(true);
     try {
-      // NGゾーン計算用: すでにカレンダーに配置済みのタスク
       const existingPlacedTasks = tasks.filter((t) => t.start && !t.completed);
-
-      // Qテーブル評価用: 未完了かつ未スケジュールのタスク
       const uncompletedAndUnscheduledTasks = tasks.filter(
         (t) => !t.completed && !t.start
       );
 
+      const requestBody = {
+        userId: currentUserId,
+        task: {
+          id: "temp-" + Date.now(),
+          title: newTaskTitle,
+          estimatedTime: parseInt(newTaskEstimate),
+          deadline: newTaskDeadline || null,
+        },
+        existingTasks: existingPlacedTasks,
+        uncompletedTasks: uncompletedAndUnscheduledTasks,
+        unavailableSlots: unavailableSlots,
+      };
+
+      if (rejectedSlot) {
+        requestBody.rejectedSlot = {
+          start: rejectedSlot.start.toISOString(),
+          end: rejectedSlot.end.toISOString(),
+        };
+      }
+
+      console.log(
+        "AIへのリクエスト内容:",
+        JSON.stringify(requestBody, null, 2)
+      );
+
       const response = await fetch(`${FLASK_SERVER_URL}/suggest-slot`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          userId: currentUserId,
-          // 提案してほしい新規タスク
-          task: {
-            id: "temp-" + Date.now(),
-            title: newTaskTitle,
-            estimatedTime: parseInt(newTaskEstimate),
-            deadline: newTaskDeadline || null,
-          },
-          // AIが考慮するべき他の情報
-          existingTasks: existingPlacedTasks, // NGゾーン用
-          uncompletedTasks: uncompletedAndUnscheduledTasks, // Qテーブル評価用
-          preferredModel: userPreference, // Pass user preference
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -807,12 +788,10 @@ function MainAppContent() {
       });
       setMessage({ text: "AIが最適な日時を提案しました！", type: "info" });
     } catch (error) {
-      console.error("Error requesting AI suggestion:", error);
       setMessage({
         text: `AI提案中にエラーが発生しました: ${error.message}`,
         type: "error",
       });
-      // 提案が失敗したら、AI提案の表示をクリアする
       setAiDateSuggestion(null);
     } finally {
       setIsLoading(false);
@@ -820,14 +799,7 @@ function MainAppContent() {
   };
 
   const confirmAndAddTask = async () => {
-    if (!googleUserInfo || !currentUserId || !aiDateSuggestion) {
-      setMessage({
-        text: "必要な情報が揃っていません。",
-        type: "error",
-      });
-      return;
-    }
-
+    if (!currentUserId || !aiDateSuggestion) return;
     setIsLoading(true);
     const { title, estimatedTime, suggestedSlot } = aiDateSuggestion;
     const finalDeadline = suggestedSlot.start.toISOString().split("T")[0];
@@ -835,18 +807,13 @@ function MainAppContent() {
     try {
       let googleEventId = null;
       if (googleAccessToken) {
-        const eventDescription = `見積もり時間: ${estimatedTime}分`;
         const addEventResult = await addEventToGoogleCalendar(
           title,
           suggestedSlot.start,
           suggestedSlot.end,
-          eventDescription
+          `見積もり時間: ${estimatedTime}分`
         );
-        if (addEventResult.success) {
-          googleEventId = addEventResult.eventId;
-        } else {
-          console.warn("Failed to add event to Google Calendar.");
-        }
+        if (addEventResult.success) googleEventId = addEventResult.eventId;
       }
 
       const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
@@ -862,11 +829,8 @@ function MainAppContent() {
             end: suggestedSlot.end.toISOString(),
             completed: false,
             createdAt: new Date().toISOString(),
-            completedAt: null,
-            concentrationLevel: null,
             hidden: false,
             googleEventId: googleEventId,
-            rescheduled: false,
           },
         }),
       });
@@ -877,16 +841,12 @@ function MainAppContent() {
       }
 
       setMessage({ text: `課題「${title}」を追加しました！`, type: "success" });
-
       fetchTasks();
-
-      // AI提案確定後、入力フィールドをクリアし、AI提案表示をリセットして課題追加画面に戻る
       setNewTaskTitle("");
       setNewTaskEstimate("");
       setNewTaskDeadline("");
       setAiDateSuggestion(null);
     } catch (error) {
-      console.error("Error confirming and adding task:", error);
       setMessage({
         text: `課題の追加中にエラーが発生しました: ${error.message}`,
         type: "error",
@@ -897,6 +857,15 @@ function MainAppContent() {
   };
 
   const handleTaskSubmit = async () => {
+    // もし既にAIの提案が表示されているなら、何もしない
+    if (aiDateSuggestion) {
+      setMessage({
+        text: "提案が表示されています。下のボタンから操作してください。",
+        type: "info",
+      });
+      return;
+    }
+
     if (!newTaskTitle.trim()) {
       setMessage({ text: "課題タイトルを入力してください。", type: "error" });
       return;
@@ -915,150 +884,54 @@ function MainAppContent() {
       });
       return;
     }
-
-    // AI提案モード
-    // editingTask ステートは存在しないため、常にAI提案モードの条件で判定
     if (googleAccessToken && newTaskEstimate.trim()) {
+      // 最初の提案なので、引数なしで呼び出す
       requestAiSuggestion();
     } else {
-      // 手動追加モード（見積もり時間がない場合など）
-      if (!newTaskEstimate.trim() || !newTaskDeadline.trim()) {
-        setMessage({
-          text: "見積もり時間と希望の期限を入力してください。",
-          type: "error",
-        });
-        return;
-      }
-      if (!currentUserId) {
-        setMessage({
-          text: "ユーザー情報が取得できません。",
-          type: "error",
-        });
-        return;
-      }
-
-      setIsLoading(true);
-      try {
-        const taskData = {
-          title: newTaskTitle,
-          estimatedTime: parseInt(newTaskEstimate),
-          deadline: newTaskDeadline,
-          completed: false,
-          createdAt: new Date().toISOString(),
-          completedAt: null,
-          concentrationLevel: null,
-          hidden: false,
-          googleEventId: null,
-        };
-
-        // 編集機能削除のため、常にPOST
-        const response = await fetch(`${FLASK_SERVER_URL}/tasks`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: currentUserId,
-            task: taskData,
-            preferredModel: userPreference, // Pass user preference
-          }),
-        });
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "課題の追加に失敗しました");
-        }
-        setMessage({
-          text: `課題「${newTaskTitle}」を追加しました！`,
-          type: "success",
-        });
-
-        fetchTasks();
-        setNewTaskTitle("");
-        setNewTaskEstimate("");
-        setNewTaskDeadline("");
-        // setEditingTask(null); // 編集機能削除のためコメントアウト
-      } catch (error) {
-        console.error("Error saving task manually:", error);
-        setMessage({
-          text: "課題の保存中にエラーが発生しました。",
-          type: "error",
-        });
-      } finally {
-        setIsLoading(false);
-      }
+      setMessage({
+        text: "AI提案には見積もり時間が必要です。",
+        type: "error",
+      });
     }
   };
 
-  // 編集機能削除のため、startEditTask 関数も削除
-  // const startEditTask = (task) => { ... };
-
-  // 新しく追加: 期限切れタスクをスキップする関数
   const handleSkipTask = async (taskId) => {
-    if (!googleUserInfo || !currentUserId) return;
-
+    if (!currentUserId) return;
     const taskToSkip = tasks.find((task) => task.id === taskId);
     if (!taskToSkip) return;
 
     setIsLoading(true);
     try {
-      // 期限切れで、かつスケジュールされたタスクのみ、AIに負のフィードバックを送信
-      // スケジュールされていないタスクのスキップはAI学習に影響させない
       if (taskToSkip.start && taskToSkip.end) {
-        const skipResponse = await fetch(`${FLASK_SERVER_URL}/skip-feedback`, {
+        await fetch(`${FLASK_SERVER_URL}/skip-feedback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: currentUserId,
-            taskId: taskId, // AI側での参照用
+            taskId: taskId,
             startTime: taskToSkip.start,
             endTime: taskToSkip.end,
-            preferredModel: userPreference, // Pass user preference
           }),
         });
-
-        if (!skipResponse.ok) {
-          const errorData = await skipResponse.json();
-          setMessage({
-            text: `スキップフィードバックの送信中にエラー: ${errorData.error}`,
-            type: "error",
-          });
-        } else {
-          setMessage({
-            text: "課題をスキップしました（AIが学習します）。",
-            type: "info",
-          });
-        }
-      } else {
-        setMessage({ text: "課題をスキップしました。", type: "info" });
       }
 
-      // 課題の状態を更新して非表示にする
-      const updateTaskResponse = await fetch(
-        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            completed: true, // 完了済みとしてマーク
-            completedAt: new Date().toISOString(), // 現在時刻を完了時刻とする
-            concentrationLevel: 0, // スキップなので集中度は0（またはnull）
-            hidden: true, // リストから非表示
-            rescheduled: false, // 再入力フラグをリセット
-            // googleEventIdはそのまま
-          }),
-        }
-      );
-      if (!updateTaskResponse.ok) {
-        const errorData = await updateTaskResponse.json();
-        throw new Error(errorData.error || "タスク状態の更新に失敗");
-      }
+      await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          completed: true,
+          completedAt: new Date().toISOString(),
+          concentrationLevel: 0,
+          hidden: true,
+        }),
+      });
 
-      // Googleカレンダーイベントがあれば削除（AIが登録したイベントなので）
       if (taskToSkip.googleEventId) {
         await deleteEventFromGoogleCalendar(taskToSkip.googleEventId);
       }
-
-      fetchTasks(); // リストを再取得してUIを更新
+      fetchTasks();
+      setMessage({ text: "課題をスキップしました。", type: "info" });
     } catch (error) {
-      console.error("Error skipping task:", error);
       setMessage({
         text: `課題のスキップ中にエラーが発生しました: ${error.message}`,
         type: "error",
@@ -1069,53 +942,30 @@ function MainAppContent() {
   };
 
   const toggleTaskCompletion = async (taskId, currentStatus) => {
-    if (!googleUserInfo || !currentUserId) return;
-
+    if (!currentUserId) return;
     const taskToUpdate = tasks.find((task) => task.id === taskId);
     if (!taskToUpdate) return;
 
     if (!currentStatus) {
-      // 未完了 -> 完了にする場合はフィードバックモーダルを表示
       setShowCompletionFeedbackModalForTask(taskToUpdate);
     } else {
-      // 完了状態 -> 未完了に戻す場合
       setIsLoading(true);
       try {
-        // Google Event IDがあれば削除を試みる (期限内のタスクのみ)
-        // 期限切れタスクは元々Google Calendarに登録されない想定なので、削除処理は不要だが、
-        // 念のためtaskToUpdate.googleEventIdの存在とtaskToUpdate.startで確認
-        if (taskToUpdate.googleEventId && taskToUpdate.start) {
-          // 期限内のタスクのみGoogleカレンダーから削除
-          await deleteEventFromGoogleCalendar(taskToUpdate.googleEventId);
-        }
-        const response = await fetch(
-          `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              completed: false,
-              completedAt: null,
-              concentrationLevel: null,
-              hidden: false, // 未完了に戻したら再表示
-              googleEventId:
-                taskToUpdate.start && taskToUpdate.googleEventId
-                  ? taskToUpdate.googleEventId
-                  : null, // 期限内のタスクでGoogle Event IDがあれば維持、そうでなければnull
-              rescheduled: false,
-            }),
-          }
-        );
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || "タスク状態の更新に失敗しました");
-        }
-        setMessage({ text: "課題を未完了に戻しました。", type: "info" });
+        await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            completed: false,
+            completedAt: null,
+            concentrationLevel: null,
+            hidden: false,
+          }),
+        });
         fetchTasks();
+        setMessage({ text: "課題を未完了に戻しました。", type: "info" });
       } catch (error) {
-        console.error("Error reverting task completion:", error);
         setMessage({
-          text: "課題の完了状態の切り替え中にエラーが発生しました。",
+          text: `課題の完了状態の切り替え中にエラー: ${error.message}`,
           type: "error",
         });
       } finally {
@@ -1129,15 +979,7 @@ function MainAppContent() {
     concentration,
     completionTime
   ) => {
-    if (!googleUserInfo || !currentUserId) {
-      setShowCompletionFeedbackModalForTask(null);
-      return;
-    }
-    if (!userPreference) {
-      setMessage({
-        text: "朝型/夜型の設定を選択してください。",
-        type: "error",
-      });
+    if (!currentUserId || !userPreference) {
       setShowCompletionFeedbackModalForTask(null);
       return;
     }
@@ -1145,26 +987,13 @@ function MainAppContent() {
     setIsLoading(true);
     try {
       const taskToComplete = tasks.find((task) => task.id === taskId);
-      if (!taskToComplete) {
-        throw new Error("完了対象のタスクが見つかりませんでした。");
-      }
+      if (!taskToComplete) throw new Error("対象タスクが見つかりません。");
 
-      // 期限切れのタスクかどうかを判定
       const isOverdue =
         taskToComplete.end && new Date() > new Date(taskToComplete.end);
 
-      // AI学習フィードバック送信の条件
-      // 期限内のスケジュール済みタスクの場合のみAI学習フィードバックを送信
       if (!isOverdue && taskToComplete.start && taskToComplete.end) {
-        const tasksForLearning = tasks.map((task) =>
-          task.id === taskId ? { ...task, completed: true, hidden: true } : task
-        );
-
-        const existingPlacedTasks = tasks.filter(
-          (t) => t.id !== taskId && t.start && !t.completed
-        );
-
-        const feedbackResponse = await fetch(`${FLASK_SERVER_URL}/feedback`, {
+        await fetch(`${FLASK_SERVER_URL}/feedback`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1172,63 +1001,37 @@ function MainAppContent() {
             startTime: taskToComplete.start,
             endTime: taskToComplete.end,
             concentrationRating: concentration,
-            react_tasks: tasksForLearning,
-            existingTasks: existingPlacedTasks,
-            preferredModel: userPreference, // Pass user preference
+            react_tasks: tasks.filter((t) => t.id !== taskId),
+            existingTasks: tasks.filter(
+              (t) => t.id !== taskId && t.start && !t.completed
+            ),
           }),
-        });
-
-        if (!feedbackResponse.ok) {
-          const errorData = await feedbackResponse.json();
-          setMessage({
-            text: `AIの学習中にエラー: ${errorData.error}`,
-            type: "error",
-          });
-        } else {
-          setMessage({
-            text: "素晴らしい！フィードバックをAIが学習します。",
-            type: "success",
-          });
-        }
-      } else {
-        // 期限切れまたはスケジュールされていないタスクの場合は学習をスキップ
-        setMessage({
-          text: isOverdue
-            ? "期限切れ課題を完了しました。"
-            : "課題を完了しました（学習はスキップされました）。",
-          type: "info", // 期限切れの場合は情報、学習スキップの場合は情報
         });
       }
 
-      // タスクの完了状態を更新
-      const updateTaskResponse = await fetch(
-        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            completed: true,
-            completedAt: completionTime.toISOString(),
-            concentrationLevel: concentration,
-            hidden: true, // 完了したら非表示
-          }),
-        }
-      );
-      if (!updateTaskResponse.ok) {
-        const errorData = await updateTaskResponse.json();
-        throw new Error(errorData.error || "タスク状態の更新に失敗");
-      }
+      await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          completed: true,
+          completedAt: completionTime.toISOString(),
+          concentrationLevel: concentration,
+          hidden: true,
+        }),
+      });
 
-      // Googleカレンダーイベントがあれば削除 (期限内のタスクのみ)
       if (taskToComplete.googleEventId && !isOverdue) {
         await deleteEventFromGoogleCalendar(taskToComplete.googleEventId);
       }
 
       fetchTasks();
-    } catch (error) {
-      console.error("Error saving concentrated completion:", error);
       setMessage({
-        text: `課題の完了情報の保存に失敗しました: ${error.message}`,
+        text: "課題完了おめでとうございます！",
+        type: "success",
+      });
+    } catch (error) {
+      setMessage({
+        text: `完了情報の保存に失敗しました: ${error.message}`,
         type: "error",
       });
     } finally {
@@ -1238,61 +1041,56 @@ function MainAppContent() {
   };
 
   const deleteTask = async (taskId) => {
-    if (!googleUserInfo || !currentUserId) return;
+    if (!currentUserId) return;
     setIsLoading(true);
     try {
       const taskToDelete = tasks.find((task) => task.id === taskId);
-      // Googleカレンダーイベントがあれば削除 (期限内のタスクのみ)
-      const isOverdue =
-        taskToDelete.end && new Date() > new Date(taskToDelete.end);
-      if (taskToDelete && taskToDelete.googleEventId && !isOverdue) {
-        // 期限内のタスクのみGoogleカレンダーから削除
+      if (taskToDelete && taskToDelete.googleEventId) {
         await deleteEventFromGoogleCalendar(taskToDelete.googleEventId);
       }
-      const response = await fetch(
-        `${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`,
-        { method: "DELETE" }
-      );
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "タスクの削除に失敗");
-      }
-      setMessage({ text: "課題を削除しました。", type: "info" });
+      await fetch(`${FLASK_SERVER_URL}/tasks/${currentUserId}/${taskId}`, {
+        method: "DELETE",
+      });
       fetchTasks();
+      setMessage({ text: "課題を削除しました。", type: "info" });
     } catch (error) {
-      console.error("Error deleting task:", error); // エラーログを追加
       setMessage({ text: "課題の削除中にエラー。", type: "error" });
     } finally {
       setIsLoading(false);
     }
   };
 
-  // --- Handle User Preference Save ---
   const handleSaveUserPreference = async (preference) => {
-    if (!currentUserId) {
-      setMessage({ text: "ユーザー情報が取得できません。", type: "error" });
+    // 既に同じ設定が選択されている場合は、API呼び出しをスキップする
+    if (preference === userPreference) {
       return;
     }
+
+    if (!currentUserId) return;
     setIsLoading(true);
     try {
-      const response = await fetch(`${FLASK_SERVER_URL}/user-preference`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: currentUserId,
-          preferredModel: preference,
-        }),
-      });
+      const response = await fetch(
+        `${FLASK_SERVER_URL}/user-preference/${currentUserId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ preferenceType: preference }),
+        }
+      );
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "ユーザー設定の保存に失敗しました");
+        throw new Error(errorData.error || "ユーザー設定の保存に失敗");
       }
       setUserPreference(preference);
+
+      // 設定が完了したら、スムーズに次の操作に移れるようUIを更新する
+      setShowUserPreference(false);
+      setShowTaskInput(true);
+
       setMessage({ text: "ユーザー設定を保存しました！", type: "success" });
     } catch (error) {
-      console.error("Error saving user preference:", error);
       setMessage({
-        text: `ユーザー設定の保存中にエラーが発生しました: ${error.message}`,
+        text: `ユーザー設定の保存中にエラー: ${error.message}`,
         type: "error",
       });
     } finally {
@@ -1300,20 +1098,51 @@ function MainAppContent() {
     }
   };
 
-  // --- UI Rendering ---
+  const handleResetModel = async () => {
+    if (!currentUserId) return;
+
+    // 確認ダイアログを表示
+    if (
+      window.confirm(
+        "本当に学習データをリセットしますか？\nこれまでの学習履歴はすべて失われ、最初の状態に戻ります。"
+      )
+    ) {
+      setIsLoading(true);
+      try {
+        const response = await fetch(
+          `${FLASK_SERVER_URL}/reset-model/${currentUserId}`,
+          {
+            method: "POST",
+          }
+        );
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "リセットに失敗しました。");
+        }
+        setMessage({
+          text: "学習データをリセットしました。次回から新しい設定で学習が始まります。",
+          type: "success",
+        });
+        // UIの状態をリフレッシュするために設定を再取得
+        fetchUserPreference();
+      } catch (error) {
+        setMessage({
+          text: `リセット中にエラーが発生しました: ${error.message}`,
+          type: "error",
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
   const getTaskCardBgColor = (task) => {
     if (task.completed) return "bg-green-100 border-green-500";
-    const now = new Date();
-    // 期限切れで未完了のタスクは灰色
-    if (task.end && now > new Date(task.end) && !task.completed) {
+    if (task.end && new Date() > new Date(task.end) && !task.completed) {
       return "bg-gray-200 border-gray-400";
     }
-    // rescheduled のタスクに関する色分けは維持 (再入力項目はUIから削除されてもフラグは残るため)
-    if (task.rescheduled && !task.start) {
-      return "bg-blue-100 border-blue-500 animate-pulse";
-    }
     if (task.start) {
-      const diffHours = (new Date(task.start) - now) / 36e5;
+      const diffHours = (new Date(task.start) - new Date()) / 36e5;
       if (diffHours < 24) return "bg-red-100 border-red-500";
       if (diffHours < 72) return "bg-yellow-100 border-yellow-500";
     }
@@ -1390,13 +1219,12 @@ function MainAppContent() {
           </section>
         )}
 
-        {/* User Preference Section */}
-        {googleUserInfo && ( // Show only if user is logged in
+        {googleUserInfo && (
           <CollapsibleSection
             title="ユーザー設定"
             icon={<User className="h-6 w-6 text-purple-500" />}
-            isOpen={true} // You might want to control this with a state
-            setIsOpen={() => {}} // Placeholder, as it's always open for now
+            isOpen={showUserPreference}
+            setIsOpen={setShowUserPreference}
           >
             <div className="space-y-4">
               <div>
@@ -1404,13 +1232,20 @@ function MainAppContent() {
                   あなたは朝型ですか、夜型ですか？
                 </label>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <label className="flex items-center cursor-pointer bg-blue-50 p-3 rounded-lg border border-blue-200 shadow-sm hover:bg-blue-100 transition flex-1">
+                  <label
+                    className={`flex items-center p-3 rounded-lg border shadow-sm transition flex-1 ${
+                      userPreference !== null
+                        ? "opacity-70 cursor-not-allowed bg-gray-100"
+                        : "cursor-pointer bg-blue-50 border-blue-200 hover:bg-blue-100"
+                    }`}
+                  >
                     <input
                       type="radio"
                       name="userPreference"
                       value="morning"
                       checked={userPreference === "morning"}
                       onChange={(e) => handleSaveUserPreference(e.target.value)}
+                      disabled={userPreference !== null}
                       className="form-radio h-5 w-5 text-blue-600"
                     />
                     <Sun className="ml-2 mr-1 h-5 w-5 text-blue-500" />
@@ -1418,13 +1253,20 @@ function MainAppContent() {
                       朝型
                     </span>
                   </label>
-                  <label className="flex items-center cursor-pointer bg-indigo-50 p-3 rounded-lg border border-indigo-200 shadow-sm hover:bg-indigo-100 transition flex-1">
+                  <label
+                    className={`flex items-center p-3 rounded-lg border shadow-sm transition flex-1 ${
+                      userPreference !== null
+                        ? "opacity-70 cursor-not-allowed bg-gray-100"
+                        : "cursor-pointer bg-indigo-50 border-indigo-200 hover:bg-indigo-100"
+                    }`}
+                  >
                     <input
                       type="radio"
                       name="userPreference"
                       value="night"
                       checked={userPreference === "night"}
                       onChange={(e) => handleSaveUserPreference(e.target.value)}
+                      disabled={userPreference !== null}
                       className="form-radio h-5 w-5 text-indigo-600"
                     />
                     <Moon className="ml-2 mr-1 h-5 w-5 text-indigo-500" />
@@ -1434,125 +1276,144 @@ function MainAppContent() {
                   </label>
                 </div>
               </div>
-              {userPreference === null && (
+              {!userPreference && (
                 <p className="text-sm text-red-500 text-center">
                   AI提案を最適化するために、朝型か夜型かを選択してください。
                 </p>
               )}
             </div>
+
+            <div className="mt-4 pt-4 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={handleResetModel}
+                className="flex items-center px-4 py-2 bg-red-100 text-red-700 text-sm rounded-full shadow-sm hover:bg-red-200 transition duration-300"
+                title="学習データを初期状態に戻します"
+              >
+                <RotateCw className="h-4 w-4 mr-2" />
+                学習データをリセット
+              </button>
+            </div>
           </CollapsibleSection>
         )}
 
         <CollapsibleSection
-          title={"新しい課題を追加"} // 編集機能削除のためタイトルを固定
-          icon={<Plus className="h-6 w-6 text-indigo-500" />} // 編集機能削除のためアイコンを固定
+          title={"新しい課題を追加"}
+          icon={<Plus className="h-6 w-6 text-indigo-500" />}
           isOpen={showTaskInput}
           setIsOpen={setShowTaskInput}
         >
-          <div className="space-y-3">
-            <div>
-              <label
-                htmlFor="taskTitle"
-                className="block text-sm font-medium text-gray-700 mb-0.5"
-              >
-                課題タイトル <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="taskTitle"
-                ref={taskInputRef}
-                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                placeholder="例: 卒業論文を書く"
-                value={newTaskTitle}
-                onChange={(e) => setNewTaskTitle(e.target.value)}
-              />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <fieldset disabled={!userPreference}>
+            <div className="space-y-3">
               <div>
                 <label
-                  htmlFor="taskEstimate"
+                  htmlFor="taskTitle"
                   className="block text-sm font-medium text-gray-700 mb-0.5"
                 >
-                  見積もり時間 (分) <span className="text-red-500">*</span>
+                  課題タイトル <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="number"
-                  id="taskEstimate"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  placeholder="例: 180"
-                  value={newTaskEstimate}
-                  onChange={(e) => setNewTaskEstimate(e.target.value)}
-                  min="0"
+                  type="text"
+                  id="taskTitle"
+                  ref={taskInputRef}
+                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  placeholder="例: 卒業論文を書く"
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
                 />
               </div>
-              <div>
-                <label
-                  htmlFor="taskDeadline"
-                  className="block text-sm font-medium text-gray-700 mb-0.5"
-                >
-                  希望の期限
-                </label>
-                <input
-                  type="date"
-                  id="taskDeadline"
-                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  value={newTaskDeadline}
-                  onChange={(e) => setNewTaskDeadline(e.target.value)}
-                  min={new Date().toISOString().split("T")[0]}
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="taskEstimate"
+                    className="block text-sm font-medium text-gray-700 mb-0.5"
+                  >
+                    見積もり時間 (分) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    id="taskEstimate"
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                    placeholder="例: 180"
+                    value={newTaskEstimate}
+                    onChange={(e) => setNewTaskEstimate(e.target.value)}
+                    min="0"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="taskDeadline"
+                    className="block text-sm font-medium text-gray-700 mb-0.5"
+                  >
+                    希望の期限
+                  </label>
+                  <input
+                    type="date"
+                    id="taskDeadline"
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                    value={newTaskDeadline}
+                    onChange={(e) => setNewTaskDeadline(e.target.value)}
+                    min={new Date().toISOString().split("T")[0]}
+                  />
+                </div>
               </div>
             </div>
-          </div>
 
-          {aiDateSuggestion ? (
-            <div className="mt-4 p-3 bg-indigo-50 rounded-lg space-y-3">
-              <p className="font-semibold text-center text-indigo-800">
-                AIの提案:{" "}
-                <span className="font-bold">
-                  {new Date(
-                    aiDateSuggestion.suggestedSlot.start
-                  ).toLocaleString("ja-JP", {
-                    month: "long",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "Asia/Tokyo",
-                  })}
-                </span>{" "}
-                でいかがですか？
-              </p>
-              <div className="flex justify-center gap-3">
+            {aiDateSuggestion ? (
+              <div className="mt-4 p-3 bg-indigo-50 rounded-lg space-y-3">
+                <p className="font-semibold text-center text-indigo-800">
+                  AIの提案:{" "}
+                  <span className="font-bold">
+                    {new Date(
+                      aiDateSuggestion.suggestedSlot.start
+                    ).toLocaleString("ja-JP", {
+                      month: "long",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      timeZone: "Asia/Tokyo",
+                    })}
+                  </span>{" "}
+                  でいかがですか？
+                </p>
+                <div className="flex justify-center gap-3">
+                  <button
+                    onClick={confirmAndAddTask}
+                    className="flex items-center px-4 py-2 bg-green-500 text-white rounded-full shadow hover:bg-green-600 transition"
+                  >
+                    <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
+                  </button>
+                  <button
+                    onClick={handleRejectAndResuggest}
+                    className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
+                  >
+                    <RefreshCw className="h-4 w-4 mr-1.5" /> 別の時間を探す
+                  </button>
+                  <button
+                    onClick={() => setAiDateSuggestion(null)}
+                    className="flex items-center px-4 py-2 bg-gray-400 text-white rounded-full shadow hover:bg-gray-500 transition"
+                  >
+                    <XCircle className="h-4 w-4 mr-1.5" /> キャンセル
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row gap-3 mt-4">
                 <button
-                  onClick={confirmAndAddTask}
-                  className="flex items-center px-4 py-2 bg-green-500 text-white rounded-full shadow hover:bg-green-600 transition"
+                  onClick={handleTaskSubmit}
+                  disabled={isLoading || !userPreference}
+                  className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <ThumbsUp className="h-4 w-4 mr-1.5" /> この日で決定
-                </button>
-                <button
-                  onClick={handleRejectAndResuggest}
-                  className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-full shadow hover:bg-yellow-600 transition"
-                >
-                  <RefreshCw className="h-4 w-4 mr-1.5" /> 別の時間を探す
-                </button>
-                <button
-                  onClick={() => setAiDateSuggestion(null)}
-                  className="flex items-center px-4 py-2 bg-gray-400 text-white rounded-full shadow hover:bg-gray-500 transition"
-                >
-                  <XCircle className="h-4 w-4 mr-1.5" /> キャンセル
+                  <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加
                 </button>
               </div>
-            </div>
-          ) : (
-            <div className="flex flex-col sm:flex-row gap-3 mt-4">
-              <button
-                onClick={handleTaskSubmit}
-                disabled={isLoading}
-                className="flex-1 flex items-center justify-center px-5 py-2.5 bg-indigo-600 text-white rounded-full shadow-md hover:bg-indigo-700 transition transform hover:scale-105 disabled:opacity-50"
-              >
-                <Sparkles className="mr-2 h-5 w-5" /> AIが日時を入れて課題追加{" "}
-                {/* 編集テキストを削除 */}
-              </button>
-              {/* 編集キャンセルボタンを削除 */}
+            )}
+          </fieldset>
+
+          {!userPreference && (
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-300 rounded-lg text-center text-sm text-yellow-800 animate-fade-in-down">
+              <p>
+                まず「ユーザー設定」で朝型か夜型を選択してください。設定が完了すると、課題を追加できるようになります。
+              </p>
             </div>
           )}
         </CollapsibleSection>
@@ -1576,10 +1437,10 @@ function MainAppContent() {
           ) : (
             <ul className="space-y-3">
               {visibleTasks.map((task) => {
-                // 期限切れかどうかを判定 (現在時刻を考慮)
-                const now = new Date();
                 const isOverdue =
-                  task.end && now > new Date(task.end) && !task.completed;
+                  task.end &&
+                  new Date() > new Date(task.end) &&
+                  !task.completed;
 
                 return (
                   <li
@@ -1602,8 +1463,7 @@ function MainAppContent() {
                             <span className="ml-2 text-red-600">
                               (期限切れ)
                             </span>
-                          )}{" "}
-                          {/* 期限切れ表示を追加 */}
+                          )}
                         </h3>
                         <div className="flex flex-wrap items-center text-xs text-gray-600 mt-0.5 gap-x-2">
                           {task.estimatedTime > 0 && !task.completed && (
@@ -1615,7 +1475,7 @@ function MainAppContent() {
                           {task.start && !task.completed && (
                             <span className={`flex items-center font-semibold`}>
                               <Calendar className="h-3.5 w-3.5 mr-0.5" />{" "}
-                              提案日時: {/* テキストを変更 */}
+                              提案日時:{" "}
                               {new Date(task.start).toLocaleString("ja-JP", {
                                 month: "long",
                                 day: "numeric",
@@ -1625,18 +1485,12 @@ function MainAppContent() {
                               })}
                             </span>
                           )}
-                          {/* 期限切れタスクの「期限切れ」表示は上記のh3タグ内に移動し、再入力項目は削除 */}
-                          {task.rescheduled && !task.start && (
-                            <span className="text-blue-600 font-semibold">
-                              再入力待ち
-                            </span>
-                          )}
                         </div>
                       </div>
                       <div className="flex items-center space-x-1.5 ml-2">
-                        {!task.completed ? ( // 未完了の場合のみボタンを表示
+                        {!task.completed ? (
                           <>
-                            {isOverdue && task.start ? ( // 期限切れかつスケジュールされたタスクの場合のみスキップボタン
+                            {isOverdue && task.start ? (
                               <button
                                 onClick={() => handleSkipTask(task.id)}
                                 className="p-1.5 rounded-full bg-gray-500 hover:bg-gray-600 text-white shadow-sm transition"
@@ -1652,7 +1506,7 @@ function MainAppContent() {
                               className={`p-1.5 rounded-full transition shadow-sm ${
                                 isOverdue
                                   ? "bg-purple-500 hover:bg-purple-600"
-                                  : "bg-green-500 hover:bg-green-600" // 期限切れは紫色、期限内は緑色
+                                  : "bg-green-500 hover:bg-green-600"
                               } text-white`}
                               title={
                                 isOverdue
@@ -1664,7 +1518,6 @@ function MainAppContent() {
                             </button>
                           </>
                         ) : (
-                          // 完了済みの場合は未完了に戻すボタンのみ
                           <button
                             onClick={() =>
                               toggleTaskCompletion(task.id, task.completed)
@@ -1675,7 +1528,6 @@ function MainAppContent() {
                             <Check className="h-4 w-4" />
                           </button>
                         )}
-                        {/* 編集ボタンは削除 */}
                         <button
                           onClick={() => deleteTask(task.id)}
                           className="p-1.5 rounded-full bg-red-400 hover:bg-red-500 text-white shadow-sm transition"
@@ -1685,8 +1537,6 @@ function MainAppContent() {
                         </button>
                       </div>
                     </div>
-
-                    {/* 期限切れの再入力項目は完全に削除 */}
                   </li>
                 );
               })}
@@ -1695,7 +1545,7 @@ function MainAppContent() {
         </CollapsibleSection>
 
         <footer className="text-center text-gray-500 text-xs pt-6 border-t border-gray-200">
-          <p>&copy; 2024 AI課題プランナー</p>
+          <p>&copy; 2025 AI課題プランナー</p>
         </footer>
       </div>
 
@@ -1709,7 +1559,11 @@ function MainAppContent() {
       )}
 
       <style>{`
-        @keyframes fade-in-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }\n        .animate-fade-in-down { animation: fade-in-down 0.4s ease-out forwards; }\n        @keyframes pulse { 50% { opacity: .7; } }\n        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }\n      `}</style>
+        @keyframes fade-in-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in-down { animation: fade-in-down 0.4s ease-out forwards; }
+        @keyframes pulse { 50% { opacity: .7; } }
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+      `}</style>
     </div>
   );
 }
