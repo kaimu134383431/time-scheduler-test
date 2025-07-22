@@ -6,7 +6,6 @@ Created with CodeSandbox
 
 -   **フロントエンド**: React
 -   **バックエンド**: Python, Flask
--   **AI**: Q学習, ε-greedy法
 -   **インフラ**: Firebase (認証), Google Calendar API
 
 #### 前提条件
